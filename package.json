@@ -1,0 +1,42 @@
+{
+  "name": "jahdar",
+  "version": "1.0.0",
+  "description": "جَحْدَر // JAHDAR — قاهر عمالقة الويب: لعبة تجريبية مفتوحة المصدر لتدمير صفحات الويب فيزيائياً بنظام فوكسل تفاعلي (2D Destructible Web Sandbox)",
+  "author": "Jahdar Community",
+  "license": "MIT",
+  "keywords": [
+    "game",
+    "canvas",
+    "physics",
+    "voxel",
+    "destruction",
+    "arabic",
+    "nextjs",
+    "react",
+    "typescript",
+    "sandbox"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.475.0",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.0.0",
+    "tw-animate-css": "^1.3.5",
+    "typescript": "^5.7.0"
+  }
+}

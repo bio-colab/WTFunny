@@ -1,0 +1,51 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Next.js build output
+/.next/
+/out/
+/build
+dist/
+
+# TypeScript & Build Info
+*.tsbuildinfo
+
+# Archives & Temporary directories
+*.tar
+*.zip
+*.gz
+*.rar
+*.7z
+attempt1/
+attempt2/
+
+# Environment files
+.env
+.env*.local
+.env.production
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# IDE & Editor caches
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Vercel
+.vercel
