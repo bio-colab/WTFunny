@@ -12,6 +12,8 @@ export const MAT_BEDROCK = 3
 
 export type ElementKind = 'glyph' | 'box' | 'image'
 
+export type SemanticRole = 'portal' | 'structure' | 'trigger' | 'platform' | 'heavy' | 'decorative'
+
 export type LevelElement = {
   id: number
   kind: ElementKind
@@ -29,6 +31,9 @@ export type LevelElement = {
   h?: number
   image?: HTMLImageElement | null
   svgXml?: string
+  href?: string // Destination URL for portal links
+  tag?: string // Source HTML DOM tag name
+  semanticRole?: SemanticRole
 }
 
 export type Chunk = {

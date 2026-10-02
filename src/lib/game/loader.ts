@@ -281,6 +281,10 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
 
       const isImg = tag === 'img'
       const inlineSvg = tag === 'svg'
+      const anchor = node.closest('a') as HTMLAnchorElement | null
+      const href = anchor ? anchor.getAttribute('href') : null
+      const isButton = tag === 'button' || node.getAttribute('role') === 'button'
+      const isHeading = /^h[1-6]$/.test(tag)
       const shadow = parseBoxShadow(cs.boxShadow)
       const hasBg =
         parseColor(cs.backgroundColor) !== null ||
@@ -320,6 +324,9 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
           bel.h = h
           bel.svgXml = svgXml ?? undefined
           bel.label = svgXml ? 'SVG Icon' : 'Image'
+          bel.tag = tag
+          bel.semanticRole = anchor && href ? 'portal' : 'heavy'
+          if (anchor && href) bel.href = href
           box = {
             x,
             y,
@@ -344,6 +351,19 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
           // Scenery containers: full page or massive sections where text/buttons live inside
           const isScenery = (bw >= W - 12 && bh >= H - 12) || (bw >= W * 0.72 && bh >= 160) || (bw >= W * 0.5 && bh >= 280)
           const bel = isScenery ? null : newElement('box', bw * bh)
+          if (bel) {
+            bel.tag = tag
+            if (anchor && href) {
+              bel.href = href
+              bel.semanticRole = 'portal'
+            } else if (isButton) {
+              bel.semanticRole = 'trigger'
+            } else if (isHeading) {
+              bel.semanticRole = 'structure'
+            } else {
+              bel.semanticRole = 'platform'
+            }
+          }
           box = {
             x,
             y,
@@ -412,6 +432,17 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
                         el.w = r.width
                         el.h = r.height
                         el.isWord = true
+                        el.tag = tag
+                        if (anchor && href) {
+                          el.href = href
+                          el.semanticRole = 'portal'
+                        } else if (isHeading) {
+                          el.semanticRole = 'structure'
+                        } else if (isButton) {
+                          el.semanticRole = 'trigger'
+                        } else {
+                          el.semanticRole = 'platform'
+                        }
                         glyphs.push({
                           ch: wordText,
                           x: r.left,
@@ -450,6 +481,17 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
                     el.w = r.width
                     el.h = r.height
                     el.isWord = false
+                    el.tag = tag
+                    if (anchor && href) {
+                      el.href = href
+                      el.semanticRole = 'portal'
+                    } else if (isHeading) {
+                      el.semanticRole = 'structure'
+                    } else if (isButton) {
+                      el.semanticRole = 'trigger'
+                    } else {
+                      el.semanticRole = 'platform'
+                    }
                     glyphs.push({
                       ch,
                       x: r.left,
