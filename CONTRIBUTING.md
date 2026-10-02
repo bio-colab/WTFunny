@@ -8,7 +8,7 @@
 
 ### 1. الإبلاغ عن المشاكل (Bug Reports)
 إذا واجهتك مشكلة أثناء اللعب أو التجربة:
-- ابحث أولاً في الـ [Issues](https://github.com/YOUR_USERNAME/jahdar/issues) للتأكد من عدم وجود بلاغ مسبق.
+- ابحث أولاً في الـ [Issues](https://github.com/bio-colab/WTFunny/issues) للتأكد من عدم وجود بلاغ مسبق.
 - افتح Issue جديدة واذكر:
   - نوع المتصفح وإصداره (Chrome, Firefox, Safari, Edge).
   - مواصفات الجهاز ونظام التشغيل.

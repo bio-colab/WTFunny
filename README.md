@@ -89,8 +89,8 @@
 ### خطوات التثبيت والتشغيل:
 ```bash
 # 1. استنساخ المستودع
-git clone https://github.com/YOUR_USERNAME/jahdar.git
-cd jahdar
+git clone https://github.com/bio-colab/WTFunny.git
+cd WTFunny
 
 # 2. تثبيت الحزم والمكتبات
 npm install
