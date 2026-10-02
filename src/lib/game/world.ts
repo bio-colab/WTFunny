@@ -1,27 +1,28 @@
-// The destructible pixel world: 2px grid cells, damage circles, fire spread,
-// falling chunks (letters/boxes), particles, and the offscreen pixel buffer.
+// Solid Bodies Physics & High-Fidelity Vector World:
+// Native 100% crisp typography, vector boxes/cards, full-resolution images,
+// rigid-body physics, kinetic impulse, dislodging, and polygon/glyph fracturing.
 
 import { ConfigManager } from './engineConfig'
 
-export const CELL = 1 // 1:1 Native Resolution Pixel Grid (Original Element Quality)
-export const SKY_ROWS = 160 // 160px of sky above the page roof
+export const CELL = 1
+export const SKY_ROWS = 160
 
 export const MAT_EMPTY = 0
 export const MAT_SOLID = 1
 export const MAT_BEDROCK = 3
 
 export type ElementKind = 'glyph' | 'box' | 'image'
-
+export type SolidBodyKind = 'word' | 'box' | 'image'
 export type SemanticRole = 'portal' | 'structure' | 'trigger' | 'platform' | 'heavy' | 'decorative'
 
 export type LevelElement = {
   id: number
   kind: ElementKind
-  cells: number[] // cell indices owned
+  cells: number[]
   lost: number
   hp: number
   alive: boolean
-  color?: number // for glyphs (avg)
+  color?: number
   label?: string
   text?: string
   font?: string
@@ -31,14 +32,92 @@ export type LevelElement = {
   h?: number
   image?: HTMLImageElement | null
   svgXml?: string
-  href?: string // Destination URL for portal links
-  tag?: string // Source HTML DOM tag name
+  href?: string
+  tag?: string
   semanticRole?: SemanticRole
 }
 
+export interface ShardPiece {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  rot: number
+  vrot: number
+  life: number
+  maxLife: number
+  kind: 'glyph' | 'polygon'
+
+  // Glyph shard (from shattered word):
+  text?: string
+  font?: string
+  color?: string
+
+  // Polygon shard (from shattered box / image):
+  poly?: { x: number; y: number }[]
+  colorStr?: string
+  bgGrad?: { type: 'linear'; angle: number; stops: { c: string; p: number }[] } | null
+  border?: { w: number; c: string } | null
+  image?: HTMLImageElement | null
+  uvX?: number
+  uvY?: number
+  uvW?: number
+  uvH?: number
+
+  settled: boolean
+}
+
+export interface SolidBody {
+  id: number
+  kind: SolidBodyKind
+  tag?: string
+  semanticRole?: SemanticRole
+  href?: string
+
+  // Spatial & Physics (World Coordinates)
+  x: number        // Left (world px)
+  y: number        // Top (world px)
+  w: number        // Width (world px)
+  h: number        // Height (world px)
+  baseY?: number   // Baseline Y for typography
+
+  vx: number       // Velocity X
+  vy: number       // Velocity Y
+  rot: number      // Angle in radians
+  vrot: number     // Angular velocity (rad/s)
+  mass: number     // Mass (based on area)
+  hp: number       // Current health
+  maxHp: number    // Initial max health
+  anchored: boolean // True = attached to page layout; false = physical dynamic body
+  settled: boolean  // True = stopped moving after falling
+  settleT: number
+  destroyed: boolean
+  burning: number   // 0 = normal, >0 = burning timer
+
+  // Typography (kind === 'word')
+  text?: string
+  font?: string
+  color?: string
+  underline?: boolean
+
+  // Box Styling (kind === 'box')
+  bg?: string | null
+  grad?: { type: 'linear'; angle: number; stops: { c: string; p: number }[] } | null
+  radius?: [number, number, number, number]
+  border?: { w: number; c: string } | null
+  shadow?: { color: string; x: number; y: number; blur: number } | null
+
+  // Image Styling (kind === 'image')
+  image?: HTMLImageElement | null
+  imgFit?: string
+  svgXml?: string
+
+  // Visual damage decals: punctures & scorches
+  damageDecals: { rx: number; ry: number; r: number }[]
+}
+
 export type Chunk = {
-  // rigid debris built from remaining cells of an element
-  x: number // world px center
+  x: number
   y: number
   vx: number
   vy: number
@@ -46,7 +125,7 @@ export type Chunk = {
   vrot: number
   gw: number
   gh: number
-  pix: Uint32Array // ABGR pixels (grid res)
+  pix: Uint32Array
   canvas: HTMLCanvasElement
   life: number
   settled: boolean
@@ -83,32 +162,45 @@ const SMOKE_COLORS = ['#5b5566', '#3f3a4a', '#2a2633', '#6e6670']
 export class World {
   GW = 0
   GH = 0
-  W = 0 // world px width
-  H = 0 // world px height
-  mat!: Uint8Array // cell material
-  color!: Uint32Array // cell color (ABGR packed) — 0 = none
-  owner!: Int32Array // cell -> element id (-1 = page bg)
-  heat!: Uint8Array // 0..255 heat (burning)
+  W = 0
+  H = 0
+
+  // Spatial Grid for O(1) Collision:
+  // cell size 4px
+  GRID_CELL = 4
+  gridW = 0
+  gridH = 0
+  spatialGrid!: Int32Array // maps cell -> bodyIndex (-1 = empty, -2 = bedrock)
+
+  // Legacy compatibility grid arrays (still kept synchronized for raycasts/HUD):
+  mat!: Uint8Array
+  color!: Uint32Array
+  owner!: Int32Array
+  heat!: Uint8Array
+  pixBuf!: Uint32Array
+  imgData!: ImageData
+  levelCanvas!: HTMLCanvasElement
+  levelCtx!: CanvasRenderingContext2D
+  dirty = true
+
+  // Solid Bodies Engine:
+  bodies: SolidBody[] = []
+  dynamicBodies: SolidBody[] = []
+  settledBodies: SolidBody[] = []
+  shards: ShardPiece[] = []
+  particles: Particle[] = []
+  burns: BurnCell[] = []
+  burnAcc = 0
+
   elements = new Map<number, LevelElement>()
+  totalMass = 1
+  destroyedMass = 0
   totalCells = 1
   destroyedCells = 0
   blocksBroken = 0
   lettersPopped = 0
   explosions = 0
-
   chunks: Chunk[] = []
-  particles: Particle[] = []
-  burns: BurnCell[] = []
-  burnAcc = 0
-
-  // offscreen pixel buffer (grid res) drawn scaled
-  pixBuf!: Uint32Array
-  imgData!: ImageData
-  levelCanvas!: HTMLCanvasElement
-  levelCtx!: CanvasRenderingContext2D
-  private smallCanvas!: HTMLCanvasElement
-  private smallCtx!: CanvasRenderingContext2D
-  dirty = true
 
   onElementGone?: (el: LevelElement) => void
   onCellDestroyed?: (wx: number, wy: number, colorABGR: number) => void
@@ -118,6 +210,12 @@ export class World {
     this.H = H
     this.GW = Math.ceil(W / CELL)
     this.GH = Math.ceil(H / CELL)
+    this.gridW = Math.ceil(W / this.GRID_CELL)
+    this.gridH = Math.ceil(H / this.GRID_CELL)
+
+    const nGrid = this.gridW * this.gridH
+    this.spatialGrid = new Int32Array(nGrid).fill(-1)
+
     const n = this.GW * this.GH
     this.mat = new Uint8Array(n)
     this.color = new Uint32Array(n)
@@ -127,39 +225,94 @@ export class World {
     this.imgData = new ImageData(this.GW, this.GH)
     new Uint32Array(this.imgData.data.buffer).set(this.pixBuf)
     this.levelCanvas = document.createElement('canvas')
-    this.levelCanvas.width = this.GW
-    this.levelCanvas.height = this.GH
+    this.levelCanvas.width = Math.min(32, this.GW)
+    this.levelCanvas.height = Math.min(32, this.GH)
     this.levelCtx = this.levelCanvas.getContext('2d')!
-    this.smallCanvas = this.levelCanvas
-    this.smallCtx = this.levelCtx
+
+    this.bodies = []
+    this.dynamicBodies = []
+    this.settledBodies = []
+    this.shards = []
+    this.particles = []
+    this.burns = []
     this.elements.clear()
-    this.chunks.length = 0
-    this.particles.length = 0
-    this.burns.length = 0
+    this.chunks = []
     this.destroyedCells = 0
+    this.destroyedMass = 0
     this.blocksBroken = 0
     this.lettersPopped = 0
     this.explosions = 0
     this.totalCells = 1
+    this.totalMass = 1
+
+    // Bedrock floor: bottom 28px
+    const bedrockY0 = Math.max(0, H - 28)
+    const gy0 = Math.floor(bedrockY0 / this.GRID_CELL)
+    for (let gy = gy0; gy < this.gridH; gy++) {
+      for (let gx = 0; gx < this.gridW; gx++) {
+        this.spatialGrid[gy * this.gridW + gx] = -2 // Bedrock marker
+      }
+    }
+
+    const bedCy0 = Math.floor(bedrockY0 / CELL)
+    for (let cy = bedCy0; cy < this.GH; cy++) {
+      for (let cx = 0; cx < this.GW; cx++) {
+        this.mat[cy * this.GW + cx] = MAT_BEDROCK
+      }
+    }
   }
 
   idx(cx: number, cy: number) {
     return cy * this.GW + cx
   }
 
-  solidAtWorld(wx: number, wy: number) {
-    const cx = Math.floor(wx / CELL)
-    const cy = Math.floor(wy / CELL)
-    if (cx < 0 || cx >= this.GW) return true // side walls
-    if (cy >= this.GH) return true
-    if (cy < 0) return false
-    return this.mat[this.idx(cx, cy)] !== MAT_EMPTY
+  // Load crisp Solid Bodies parsed by loader
+  loadBodies(bodies: SolidBody[], W: number, H: number, skyOffset = 0) {
+    this.bodies = bodies
+    let totalM = 0
+
+    for (let bIdx = 0; bIdx < bodies.length; bIdx++) {
+      const b = bodies[bIdx]
+      b.y += skyOffset
+      if (b.baseY !== undefined) b.baseY += skyOffset
+      b.id = bIdx
+      totalM += b.mass
+
+      // Stamp anchored body into spatialGrid for fast O(1) collision
+      this.stampBodyToGrid(b, bIdx)
+
+      // Also map to LevelElement for HUD / stats compatibility
+      const el: LevelElement = {
+        id: b.id,
+        kind: b.kind === 'word' ? 'glyph' : b.kind,
+        cells: [],
+        lost: 0,
+        hp: b.hp,
+        alive: true,
+        label: b.text || b.tag || 'SolidBody',
+        text: b.text,
+        font: b.font,
+        colorStr: b.color,
+        w: b.w,
+        h: b.h,
+        image: b.image,
+        svgXml: b.svgXml,
+        href: b.href,
+        tag: b.tag,
+        semanticRole: b.semanticRole,
+      }
+      this.elements.set(b.id, el)
+    }
+
+    this.totalMass = Math.max(1, totalM)
+    this.totalCells = Math.max(1, totalM)
+    this.dirty = true
   }
 
-  // Load colors + owners built by the loader (offset by sky rows)
+  // Fallback / legacy bridge loader
   loadFromLoader(
-    colors: Uint32Array, // grid res ABGR (page-only)
-    owners: Int32Array, // grid res element ids (-1 bg)
+    colors: Uint32Array,
+    owners: Int32Array,
     elements: Map<number, LevelElement>,
     pageGW: number,
     pageGH: number
@@ -183,359 +336,405 @@ export class World {
         }
       }
     }
-    // bedrock floor: 2 rows at bottom (dark)
-    let solid = 0
-    for (let i = 0; i < this.mat.length; i++) if (this.mat[i] !== MAT_EMPTY) solid++
     const bed = packColor('#1e1e1e')
-    for (let cy = this.GH - 2; cy < this.GH; cy++) {
+    for (let cy = this.GH - 28; cy < this.GH; cy++) {
       for (let cx = 0; cx < this.GW; cx++) {
         const i = this.idx(cx, cy)
         this.mat[i] = MAT_BEDROCK
         this.color[i] = bed
         this.pixBuf[i] = bed
-        solid++
       }
     }
-    this.totalCells = Math.max(1, solid)
+    this.totalCells = Math.max(1, elements.size * 100)
     this.dirty = true
+  }
+
+  private stampBodyToGrid(b: SolidBody, bIdx: number) {
+    const gx0 = Math.max(0, Math.floor(b.x / this.GRID_CELL))
+    const gy0 = Math.max(0, Math.floor(b.y / this.GRID_CELL))
+    const gx1 = Math.min(this.gridW - 1, Math.floor((b.x + b.w) / this.GRID_CELL))
+    const gy1 = Math.min(this.gridH - 1, Math.floor((b.y + b.h) / this.GRID_CELL))
+
+    for (let gy = gy0; gy <= gy1; gy++) {
+      const row = gy * this.gridW
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (this.spatialGrid[row + gx] === -1) {
+          this.spatialGrid[row + gx] = bIdx
+        }
+      }
+    }
+
+    // Mirror to legacy mat
+    const cx0 = Math.max(0, Math.floor(b.x / CELL))
+    const cy0 = Math.max(0, Math.floor(b.y / CELL))
+    const cx1 = Math.min(this.GW - 1, Math.floor((b.x + b.w) / CELL))
+    const cy1 = Math.min(this.GH - 1, Math.floor((b.y + b.h) / CELL))
+    for (let cy = cy0; cy <= cy1; cy++) {
+      const row = cy * this.GW
+      for (let cx = cx0; cx <= cx1; cx++) {
+        if (this.mat[row + cx] === MAT_EMPTY) {
+          this.mat[row + cx] = MAT_SOLID
+          this.owner[row + cx] = b.id
+        }
+      }
+    }
+  }
+
+  private clearBodyFromGrid(b: SolidBody, bIdx: number) {
+    const gx0 = Math.max(0, Math.floor(b.x / this.GRID_CELL))
+    const gy0 = Math.max(0, Math.floor(b.y / this.GRID_CELL))
+    const gx1 = Math.min(this.gridW - 1, Math.floor((b.x + b.w) / this.GRID_CELL))
+    const gy1 = Math.min(this.gridH - 1, Math.floor((b.y + b.h) / this.GRID_CELL))
+
+    for (let gy = gy0; gy <= gy1; gy++) {
+      const row = gy * this.gridW
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (this.spatialGrid[row + gx] === bIdx) {
+          this.spatialGrid[row + gx] = -1
+        }
+      }
+    }
+
+    const cx0 = Math.max(0, Math.floor(b.x / CELL))
+    const cy0 = Math.max(0, Math.floor(b.y / CELL))
+    const cx1 = Math.min(this.GW - 1, Math.floor((b.x + b.w) / CELL))
+    const cy1 = Math.min(this.GH - 1, Math.floor((b.y + b.h) / CELL))
+    for (let cy = cy0; cy <= cy1; cy++) {
+      const row = cy * this.GW
+      for (let cx = cx0; cx <= cx1; cx++) {
+        if (this.owner[row + cx] === b.id) {
+          this.mat[row + cx] = MAT_EMPTY
+          this.owner[row + cx] = -1
+        }
+      }
+    }
+  }
+
+  // --- O(1) Collision Check ---
+  solidAtWorld(wx: number, wy: number): boolean {
+    if (wx < 0 || wx >= this.W) return true
+    if (wy < 0) return false
+    if (wy >= this.H - 24) return true // Bedrock floor
+
+    // 1) Spatial grid check (anchored solid bodies)
+    const gx = Math.floor(wx / this.GRID_CELL)
+    const gy = Math.floor(wy / this.GRID_CELL)
+    if (gx >= 0 && gx < this.gridW && gy >= 0 && gy < this.gridH) {
+      const val = this.spatialGrid[gy * this.gridW + gx]
+      if (val === -2) return true // Bedrock
+      if (val >= 0) {
+        const b = this.bodies[val]
+        if (b && b.anchored && !b.destroyed) {
+          return true
+        }
+      }
+    }
+
+    // 2) Check settled fallen bodies (words and cards on the floor)
+    for (let i = 0; i < this.settledBodies.length; i++) {
+      const b = this.settledBodies[i]
+      if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+        return true
+      }
+    }
+
+    // 3) Legacy mat fallback check
+    if (this.mat) {
+      const cx = Math.floor(wx / CELL)
+      const cy = Math.floor(wy / CELL)
+      if (cx >= 0 && cx < this.GW && cy >= 0 && cy < this.GH) {
+        const m = this.mat[cy * this.GW + cx]
+        if (m === MAT_SOLID || m === MAT_BEDROCK) return true
+      }
+    }
+
+    return false
   }
 
   destroyedPct() {
-    return this.destroyedCells / this.totalCells
+    if (this.totalMass <= 0) return 0
+    return Math.min(1, this.destroyedMass / this.totalMass)
   }
 
-  // ---- damage ----
-
-  damageCircle(wx: number, wy: number, r: number, opts: { debris?: boolean; scorch?: boolean; impulse?: number; countAsDestroy?: boolean; full?: boolean } = {}) {
-    const cx = Math.floor(wx / CELL)
-    const cy = Math.floor(wy / CELL)
-    const rc = Math.ceil(r / CELL)
-    const imp = opts.impulse ?? 0
-    const popped: LevelElement[] = []
-    const affected = new Map<number, { el: LevelElement; lost: number }>()
-    for (let dy = -rc; dy <= rc; dy++) {
-      const yy = cy + dy
-      if (yy < 0 || yy >= this.GH) continue
-      for (let dx = -rc; dx <= rc; dx++) {
-        const xx = cx + dx
-        if (xx < 0 || xx >= this.GW) continue
-        const d = Math.sqrt(dx * dx + dy * dy) * CELL
-        if (d > r) continue
-        const i = this.idx(xx, yy)
-        if (this.mat[i] !== MAT_SOLID) continue
-        // falloff: keep some cells near edge for roughness (unless full annihilation)
-        if (!opts.full && d > r * 0.75 && Math.random() < 0.35) continue
-        this.destroyCell(i, wx + dx * CELL, wy + dy * CELL, opts)
-        const own = this.owner[i]
-        if (own >= 0) {
-          const a = affected.get(own)
-          if (a) a.lost++
-          else if (this.elements.has(own)) affected.set(own, { el: this.elements.get(own)!, lost: 1 })
-        }
+  // Find solid body at world coords
+  findBodyAt(wx: number, wy: number): SolidBody | null {
+    const gx = Math.floor(wx / this.GRID_CELL)
+    const gy = Math.floor(wy / this.GRID_CELL)
+    if (gx >= 0 && gx < this.gridW && gy >= 0 && gy < this.gridH) {
+      const idx = this.spatialGrid[gy * this.gridW + gx]
+      if (idx >= 0 && this.bodies[idx] && !this.bodies[idx].destroyed) {
+        return this.bodies[idx]
       }
     }
-    // pop elements that lost enough cells
-    for (const [, a] of affected) {
-      const el = a.el
-      el.lost += a.lost
-      const ratio = el.lost / Math.max(1, el.cells.length)
-      if (el.kind === 'glyph' && ratio > 0.22 && el.alive) popped.push(el)
-      else if (el.kind !== 'glyph' && (el.cells.length < 1200 ? ratio > 0.55 : ratio > 0.8) && el.alive) popped.push(el)
+    // Check dynamic / settled bodies
+    for (const b of this.dynamicBodies) {
+      if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h && !b.destroyed) return b
     }
-    for (const el of popped) this.popElement(el, wx, wy, imp || 420)
-    // scorch ring
-    if (opts.scorch) {
-      const sr = r * 1.25
-      const scx = Math.floor(wx / CELL)
-      const scy = Math.floor(wy / CELL)
-      const src = Math.ceil(sr / CELL)
-      for (let dy = -src; dy <= src; dy++) {
-        for (let dx = -src; dx <= src; dx++) {
-          const d = Math.sqrt(dx * dx + dy * dy) * CELL
-          if (d > sr || d < r * 0.8) continue
-          const xx = scx + dx
-          const yy = scy + dy
-          if (xx < 0 || yy < 0 || xx >= this.GW || yy >= this.GH) continue
-          const i = this.idx(xx, yy)
-          if (this.mat[i] !== MAT_SOLID) continue
-          if (Math.random() < 0.5) {
-            this.color[i] = darken(this.color[i], 0.35)
-            this.pixBuf[i] = this.color[i]
-          }
-        }
-      }
-      this.dirty = true
+    for (const b of this.settledBodies) {
+      if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h && !b.destroyed) return b
     }
+    return null
   }
 
-  private destroyCell(i: number, wx: number, wy: number, opts: { debris?: boolean; countAsDestroy?: boolean }) {
-    const col = this.color[i]
-    this.mat[i] = MAT_EMPTY
-    this.pixBuf[i] = 0
-    this.heat[i] = 0
-    this.destroyedCells++
-    this.dirty = true
-    if (opts.debris !== false && col !== 0 && Math.random() < 0.22 && this.particles.length < 22000) {
-      const c = unpackColor(col)
-      this.spawnParticle({
-        x: wx,
-        y: wy,
-        vx: (Math.random() - 0.5) * 260,
-        vy: -Math.random() * 300 - 60,
-        life: 0.7 + Math.random() * 0.6,
-        max: 1.3,
-        kind: 'debris',
-        color: c,
-        size: 2 + Math.random() * 2,
-        grav: 1600,
-      })
+  // Direct weapon hit on a body
+  hitBodyAt(wx: number, wy: number, dmg: number, impulseX = 0, impulseY = 0): SolidBody | null {
+    const b = this.findBodyAt(wx, wy)
+    if (!b || b.destroyed) return null
+
+    b.hp -= dmg
+    b.damageDecals.push({
+      rx: Math.max(2, Math.min(b.w - 2, wx - b.x)),
+      ry: Math.max(2, Math.min(b.h - 2, wy - b.y)),
+      r: Math.min(8, 2 + dmg * 0.12),
+    })
+
+    // Dislodge condition: damage high or anchor broken
+    const dislodgeThresh = b.maxHp * 0.75
+    if (b.anchored && (b.hp <= dislodgeThresh || Math.hypot(impulseX, impulseY) > 80)) {
+      this.dislodgeBody(b, impulseX, impulseY)
+    } else if (!b.anchored) {
+      const pushFactor = Math.min(12, 180 / b.mass)
+      b.vx += impulseX * pushFactor
+      b.vy += impulseY * pushFactor
+      b.vrot += (Math.random() - 0.5) * 4
+    }
+
+    if (b.hp <= 0) {
+      this.shatterBody(b, wx, wy, Math.hypot(impulseX, impulseY) || 300)
+    }
+
+    return b
+  }
+
+  // Break anchor from layout: body becomes dynamic rigid body
+  dislodgeBody(b: SolidBody, impulseX = 0, impulseY = 0) {
+    if (!b.anchored || b.destroyed) return
+    b.anchored = false
+    this.clearBodyFromGrid(b, b.id)
+
+    const pushFactor = Math.min(14, 220 / b.mass)
+    b.vx = impulseX * pushFactor + (Math.random() - 0.5) * 80
+    b.vy = impulseY * pushFactor - 80 - Math.random() * 120
+    b.vrot = (Math.random() - 0.5) * 8
+    b.settled = false
+    b.settleT = 0
+
+    if (!this.dynamicBodies.includes(b)) {
+      this.dynamicBodies.push(b)
+    }
+
+    if (b.kind === 'word') this.lettersPopped++
+    else this.blocksBroken++
+
+    const el = this.elements.get(b.id)
+    if (el) {
+      el.alive = false
+      this.onElementGone?.(el)
     }
   }
 
-  // an element pops off as one or more physics chunks
-  popElement(el: LevelElement, fromX: number, fromY: number, impulse: number) {
-    if (!el.alive) return
-    el.alive = false
-    if (el.kind === 'glyph') this.lettersPopped++
-    // collect remaining cells
-    const cells: number[] = []
-    for (const i of el.cells) {
-      if (this.mat[i] === MAT_SOLID) cells.push(i)
-      else if (this.owner[i] === el.id) this.owner[i] = -1
+  // Fracture and shatter a body into vector shards
+  shatterBody(b: SolidBody, hitX: number, hitY: number, force = 380) {
+    if (b.destroyed) return
+    b.destroyed = true
+    b.hp = 0
+
+    if (b.anchored) {
+      this.clearBodyFromGrid(b, b.id)
+      b.anchored = false
     }
-    if (cells.length === 0) {
-      this.checkGone(el)
-      return
+
+    // Remove from dynamic/settled arrays
+    const dynIdx = this.dynamicBodies.indexOf(b)
+    if (dynIdx >= 0) this.dynamicBodies.splice(dynIdx, 1)
+    const setIdx = this.settledBodies.indexOf(b)
+    if (setIdx >= 0) this.settledBodies.splice(setIdx, 1)
+
+    this.destroyedMass += b.mass
+    this.destroyedCells += Math.round(b.mass * 2)
+
+    // Generate physical shards
+    if (b.kind === 'word') {
+      const wordShards = generateWordShards(b, hitX, hitY, force)
+      this.shards.push(...wordShards)
+      this.lettersPopped++
+
+      // Paper / text confetti sparks
+      for (let i = 0; i < 8; i++) {
+        this.spawnParticle({
+          x: b.x + Math.random() * b.w,
+          y: b.y + Math.random() * b.h,
+          vx: (Math.random() - 0.5) * 240,
+          vy: -80 - Math.random() * 200,
+          life: 0.6 + Math.random() * 0.6,
+          max: 1.2,
+          kind: 'paper',
+          color: b.color || '#ffffff',
+          size: 2.5 + Math.random() * 2.5,
+          rot: Math.random() * Math.PI,
+          vrot: (Math.random() - 0.5) * 12,
+          grav: 1200,
+        })
+      }
+    } else {
+      const polyShards = generatePolygonShards(b, hitX, hitY, force)
+      this.shards.push(...polyShards)
+      this.blocksBroken++
+
+      // Sparks and smoke clouds
+      this.puffAt(b.x + b.w / 2, b.y + b.h / 2, Math.max(12, Math.min(40, b.w / 2)))
+      for (let i = 0; i < 10; i++) {
+        this.spawnParticle({
+          x: b.x + Math.random() * b.w,
+          y: b.y + Math.random() * b.h,
+          vx: (Math.random() - 0.5) * 280,
+          vy: -100 - Math.random() * 220,
+          life: 0.5 + Math.random() * 0.5,
+          max: 1.0,
+          kind: 'spark',
+          color: FIRE_COLORS[(Math.random() * FIRE_COLORS.length) | 0],
+          size: 3 + Math.random() * 2,
+          grav: 900,
+        })
+      }
     }
-    // split into up to 3 connected components for big boxes
-    const comps = cells.length > 400 ? splitComponents(cells, this.GW, 3) : [cells]
-    let ci = 0
-    for (const comp of comps) {
-      let minx = 1e9
-      let miny = 1e9
-      let maxx = -1
-      let maxy = -1
-      for (const i of comp) {
-        const cx = i % this.GW
-        const cy = (i / this.GW) | 0
-        if (cx < minx) minx = cx
-        if (cy < miny) miny = cy
-        if (cx > maxx) maxx = cx
-        if (cy > maxy) maxy = cy
+
+    const el = this.elements.get(b.id)
+    if (el) {
+      el.alive = false
+      this.onElementGone?.(el)
+    }
+
+    // Limit active shards
+    if (this.shards.length > 400) {
+      this.shards.splice(0, this.shards.length - 400)
+    }
+  }
+
+  popElement(target: LevelElement | SolidBody, fromX: number, fromY: number, impulse = 300) {
+    const id = target.id
+    const b = this.bodies[id] || (target as SolidBody)
+    if (b && !b.destroyed) {
+      if (b.anchored) {
+        this.dislodgeBody(b, b.x - fromX, b.y - fromY)
+      } else {
+        this.shatterBody(b, fromX, fromY, impulse)
       }
-      const gw = maxx - minx + 1
-      const gh = maxy - miny + 1
-      if (gw * gh > 90000) {
-        // too big: just erase (rare)
-        for (const i of comp) {
-          if (this.mat[i] === MAT_SOLID) this.destroyCell(i, (i % this.GW) * CELL, ((i / this.GW) | 0) * CELL, {})
-        }
-        continue
+    }
+  }
+
+  // Blast circle damage (for rockets, grenades, nukes, and shotgun)
+  damageCircle(
+    wx: number,
+    wy: number,
+    r: number,
+    opts: { debris?: boolean; scorch?: boolean; impulse?: number; countAsDestroy?: boolean; full?: boolean } = {}
+  ) {
+    const imp = opts.impulse ?? 360
+    const hitBodies = new Set<SolidBody>()
+
+    // Check all bodies in radius
+    const minX = wx - r
+    const maxX = wx + r
+    const minY = wy - r
+    const maxY = wy + r
+
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i]
+      if (b.destroyed) continue
+      // AABB overlap check
+      if (b.x + b.w < minX || b.x > maxX || b.y + b.h < minY || b.y > maxY) continue
+
+      const bcx = b.x + b.w / 2
+      const bcy = b.y + b.h / 2
+      const d = Math.hypot(bcx - wx, bcy - wy)
+      if (d <= r + Math.min(b.w, b.h) / 2) {
+        hitBodies.add(b)
       }
-      const pix = new Uint32Array(gw * gh)
-      const cv = document.createElement('canvas')
-      cv.width = gw
-      cv.height = gh
-      const cctx = cv.getContext('2d')!
-      const img = cctx.createImageData(gw, gh)
-      const buf = new Uint32Array(img.data.buffer)
-      let any = false
-      for (const i of comp) {
-        const cx = i % this.GW
-        const cy = (i / this.GW) | 0
-        const px = cx - minx
-        const py = cy - miny
-        if (this.mat[i] !== MAT_SOLID) continue
-        buf[py * gw + px] = this.color[i]
-        pix[py * gw + px] = this.color[i]
-        this.mat[i] = MAT_EMPTY
-        this.pixBuf[i] = 0
-        this.heat[i] = 0
-        this.owner[i] = -1
-        this.destroyedCells++
-        any = true
-      }
-      if (!any) continue
-      cctx.putImageData(img, 0, 0)
-      // velocity: radial from blast point + up bias
-      const cxw = (minx + gw / 2) * CELL
-      const cyw = (miny + gh / 2) * CELL
-      let dx = cxw - fromX
-      let dy = cyw - fromY
+    }
+
+    for (const b of hitBodies) {
+      const bcx = b.x + b.w / 2
+      const bcy = b.y + b.h / 2
+      let dx = bcx - wx
+      let dy = bcy - wy
       const d = Math.hypot(dx, dy) || 1
       dx /= d
       dy /= d
-      const mag = impulse * (0.6 + Math.random() * 0.5)
-      this.chunks.push({
-        x: cxw,
-        y: cyw,
-        vx: dx * mag + (Math.random() - 0.5) * 160,
-        vy: dy * mag - 120 - Math.random() * 160,
-        rot: 0,
-        vrot: (Math.random() - 0.5) * (8 + impulse / 120),
-        gw,
-        gh,
-        pix,
-        canvas: cv,
-        life: 4.5,
-        settled: false,
-        settleT: 0,
-        isVector: !!(el.text || el.image),
-        vectorText: el.text,
-        vectorFont: el.font,
-        vectorColor: el.colorStr,
-        vectorImage: el.image,
-        vectorW: el.w,
-        vectorH: el.h,
-      })
-      if (this.chunks.length > 320) {
-        const old = this.chunks.shift()
-        if (old) this.puffAt(old.x, old.y, old.gw * CELL / 2)
+
+      const falloff = Math.max(0.2, 1 - d / (r * 1.3))
+      const dmg = (opts.full ? 220 : 45 + r * 1.2) * falloff
+      b.hp -= dmg
+
+      // Add scorch decal
+      if (opts.scorch) {
+        b.damageDecals.push({
+          rx: Math.max(2, Math.min(b.w - 2, wx - b.x + dx * 6)),
+          ry: Math.max(2, Math.min(b.h - 2, wy - b.y + dy * 6)),
+          r: Math.min(16, 4 + r * 0.15),
+        })
       }
-      ci++
-      if (ci > 5) break
-    }
-    this.dirty = true
-    this.checkGone(el)
-  }
 
-  private checkGone(el: LevelElement) {
-    if (el.kind === 'glyph') return // letters count via lettersPopped
-    this.blocksBroken++
-    this.onElementGone?.(el)
-  }
-
-  puffAt(wx: number, wy: number, r: number) {
-    for (let k = 0; k < 6; k++) {
-      this.spawnParticle({
-        x: wx + (Math.random() - 0.5) * r,
-        y: wy + (Math.random() - 0.5) * r,
-        vx: (Math.random() - 0.5) * 60,
-        vy: -40 - Math.random() * 60,
-        life: 0.8,
-        max: 0.8,
-        kind: 'smoke',
-        color: SMOKE_COLORS[(Math.random() * SMOKE_COLORS.length) | 0],
-        size: 3 + Math.random() * 3,
-      })
-    }
-  }
-
-  // knock letters near a blast; big boxes tear out only the local piece
-  blastImpulse(wx: number, wy: number, r: number, power: number) {
-    const cx = Math.floor(wx / CELL)
-    const cy = Math.floor(wy / CELL)
-    const rc = Math.ceil(r / CELL)
-    const affected = new Map<number, { el: LevelElement; cells: number[] }>()
-    for (let dy = -rc; dy <= rc; dy++) {
-      const yy = cy + dy
-      if (yy < 0 || yy >= this.GH) continue
-      for (let dx = -rc; dx <= rc; dx++) {
-        const xx = cx + dx
-        if (xx < 0 || xx >= this.GW) continue
-        if (Math.sqrt(dx * dx + dy * dy) * CELL > r) continue
-        const i = this.idx(xx, yy)
-        if (this.mat[i] !== MAT_SOLID) continue
-        const own = this.owner[i]
-        if (own < 0) continue
-        const a = affected.get(own)
-        if (a) a.cells.push(i)
-        else if (this.elements.has(own)) affected.set(own, { el: this.elements.get(own)!, cells: [i] })
-      }
-    }
-    for (const [, a] of affected) {
-      const el = a.el
-      const small = el.cells.length < 1200
-      if (el.kind === 'glyph' || small) {
-        const d = Math.hypot((cx * CELL) - wx, (cy * CELL) - wy)
-        const fall = Math.max(0.25, 1 - d / (r * 1.4))
-        this.popElement(el, wx, wy, power * fall + 180)
+      if (b.hp <= 0) {
+        this.shatterBody(b, wx, wy, imp * falloff)
       } else {
-        // tear out just the blast-area cells as a flying chunk
-        this.tearCells(el, a.cells, wx, wy, power)
+        // Dislodge and propel
+        this.dislodgeBody(b, dx * imp * falloff, dy * imp * falloff - 120)
+      }
+    }
+
+    if (opts.debris !== false && this.particles.length < 18000) {
+      for (let i = 0; i < Math.min(16, Math.floor(r * 0.4)); i++) {
+        this.spawnParticle({
+          x: wx + (Math.random() - 0.5) * r * 0.7,
+          y: wy + (Math.random() - 0.5) * r * 0.7,
+          vx: (Math.random() - 0.5) * 320,
+          vy: -120 - Math.random() * 260,
+          life: 0.5 + Math.random() * 0.6,
+          max: 1.1,
+          kind: 'debris',
+          color: FIRE_COLORS[(Math.random() * FIRE_COLORS.length) | 0],
+          size: 2.5 + Math.random() * 3,
+          grav: 1500,
+        })
       }
     }
   }
 
-  // remove a subset of an element's cells and spawn them as a physics chunk
-  tearCells(el: LevelElement, cells: number[], fromX: number, fromY: number, power: number) {
-    const solid: number[] = []
-    const cellSet = new Set(el.cells)
-    for (const i of cells) {
-      if (this.mat[i] === MAT_SOLID && cellSet.has(i)) solid.push(i)
-    }
-    if (solid.length < 4) return
-    let minx = 1e9
-    let miny = 1e9
-    let maxx = -1
-    let maxy = -1
-    for (const i of solid) {
-      const cx = i % this.GW
-      const cy = (i / this.GW) | 0
-      if (cx < minx) minx = cx
-      if (cy < miny) miny = cy
-      if (cx > maxx) maxx = cx
-      if (cy > maxy) maxy = cy
-    }
-    const gw = maxx - minx + 1
-    const gh = maxy - miny + 1
-    if (gw * gh > 60000) return
-    const cv = document.createElement('canvas')
-    cv.width = gw
-    cv.height = gh
-    const cctx = cv.getContext('2d')!
-    const img = cctx.createImageData(gw, gh)
-    const buf = new Uint32Array(img.data.buffer)
-    let any = false
-    for (const i of solid) {
-      const cx = i % this.GW
-      const cy = (i / this.GW) | 0
-      const px = cx - minx
-      const py = cy - miny
-      buf[py * gw + px] = this.color[i]
-      this.mat[i] = MAT_EMPTY
-      this.pixBuf[i] = 0
-      this.heat[i] = 0
-      this.owner[i] = -1
-      this.destroyedCells++
-      any = true
-    }
-    if (!any) return
-    cctx.putImageData(img, 0, 0)
-    el.lost += solid.length
-    const k = el.lost / Math.max(1, el.cells.length)
-    const cxw = (minx + gw / 2) * CELL
-    const cyw = (miny + gh / 2) * CELL
-    let dx = cxw - fromX
-    let dy = cyw - fromY
-    const d = Math.hypot(dx, dy) || 1
-    dx /= d
-    dy /= d
-    const mag = power * (0.7 + Math.random() * 0.5)
-    this.chunks.push({
-      x: cxw,
-      y: cyw,
-      vx: dx * mag + (Math.random() - 0.5) * 140,
-      vy: dy * mag - 140 - Math.random() * 140,
-      rot: 0,
-      vrot: (Math.random() - 0.5) * (6 + power / 150),
-      gw,
-      gh,
-      pix: buf,
-      canvas: cv,
-      life: 4.5,
-      settled: false,
-      settleT: 0,
-    })
-    if (this.chunks.length > 320) {
-      const old = this.chunks.shift()
-      if (old) this.puffAt(old.x, old.y, old.gw * CELL / 2)
-    }
-    this.dirty = true
-    if (k > 0.85) {
-      el.alive = false
-      this.blocksBroken++
-      this.onElementGone?.(el)
+  // Knock elements near blast outward
+  blastImpulse(wx: number, wy: number, r: number, power: number) {
+    const minX = wx - r
+    const maxX = wx + r
+    const minY = wy - r
+    const maxY = wy + r
+
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i]
+      if (b.destroyed) continue
+      if (b.x + b.w < minX || b.x > maxX || b.y + b.h < minY || b.y > maxY) continue
+
+      const bcx = b.x + b.w / 2
+      const bcy = b.y + b.h / 2
+      let dx = bcx - wx
+      let dy = bcy - wy
+      const d = Math.hypot(dx, dy) || 1
+      dx /= d
+      dy /= d
+
+      const falloff = Math.max(0.15, 1 - d / r)
+      const applied = power * falloff
+
+      b.hp -= applied * 0.4
+      if (b.hp <= 0) {
+        this.shatterBody(b, wx, wy, applied)
+      } else if (b.anchored) {
+        this.dislodgeBody(b, dx * applied, dy * applied - 100)
+      } else {
+        const pushFactor = Math.min(12, 180 / b.mass)
+        b.vx += dx * applied * pushFactor
+        b.vy += dy * applied * pushFactor - 60
+        b.vrot += (Math.random() - 0.5) * 6
+      }
     }
   }
 
@@ -548,93 +747,29 @@ export class World {
   }
 
   igniteWorld(wx: number, wy: number, r: number) {
-    const cx = Math.floor(wx / CELL)
-    const cy = Math.floor(wy / CELL)
-    const rc = Math.ceil(r / CELL)
-    for (let dy = -rc; dy <= rc; dy++) {
-      for (let dx = -rc; dx <= rc; dx++) {
-        if (dx * dx + dy * dy > rc * rc) continue
-        const xx = cx + dx
-        const yy = cy + dy
-        if (xx < 0 || yy < 0 || xx >= this.GW || yy >= this.GH) continue
-        const i = this.idx(xx, yy)
-        if (this.mat[i] === MAT_SOLID && Math.random() < 0.75) this.igniteCell(i)
+    for (const b of this.bodies) {
+      if (b.destroyed) continue
+      const bcx = b.x + b.w / 2
+      const bcy = b.y + b.h / 2
+      if (Math.hypot(bcx - wx, bcy - wy) < r + Math.min(b.w, b.h) / 2) {
+        b.burning = 3.5
       }
     }
   }
 
-  private stepBurns(dt: number) {
-    this.burnAcc += dt
-    const spreadTick = this.burnAcc > 0.12
-    if (spreadTick) this.burnAcc = 0
-    for (let b = this.burns.length - 1; b >= 0; b--) {
-      const c = this.burns[b]
-      c.t += dt
-      const i = c.idx
-      if (this.mat[i] !== MAT_SOLID) {
-        this.burns.splice(b, 1)
-        continue
-      }
-      // flicker color
-      if (Math.random() < 0.35) {
-        this.pixBuf[i] = packColor(FIRE_COLORS[(Math.random() * FIRE_COLORS.length) | 0])
-        this.dirty = true
-      }
-      if (Math.random() < 0.028 && this.particles.length < 16000) {
-        const wx = (i % this.GW) * CELL
-        const wy = ((i / this.GW) | 0) * CELL
-        if (Math.random() < 0.6) {
-          this.spawnParticle({
-            x: wx,
-            y: wy,
-            vx: (Math.random() - 0.5) * 70,
-            vy: -80 - Math.random() * 120,
-            life: 0.5 + Math.random() * 0.5,
-            max: 1,
-            kind: 'ember',
-            color: FIRE_COLORS[(Math.random() * 3) | 0],
-            size: 2,
-            grav: -200,
-          })
-        } else {
-          this.spawnParticle({
-            x: wx,
-            y: wy - 4,
-            vx: (Math.random() - 0.5) * 40,
-            vy: -60 - Math.random() * 60,
-            life: 1 + Math.random(),
-            max: 2,
-            kind: 'smoke',
-            color: SMOKE_COLORS[(Math.random() * SMOKE_COLORS.length) | 0],
-            size: 3 + Math.random() * 4,
-          })
-        }
-      }
-      // spread
-      if (spreadTick && Math.random() < 0.45) {
-        const dirs = [-1, 1, -this.GW, this.GW, -this.GW - 1, -this.GW + 1, this.GW - 1, this.GW + 1]
-        const d = dirs[(Math.random() * dirs.length) | 0]
-        const j = i + d
-        if (j >= 0 && j < this.mat.length && this.mat[j] === MAT_SOLID && this.heat[j] === 0) {
-          this.igniteCell(j)
-        }
-      }
-      if (c.t >= c.dur) {
-        // burn out: destroy the cell
-        this.burns.splice(b, 1)
-        const wx = (i % this.GW) * CELL
-        const wy = ((i / this.GW) | 0) * CELL
-        this.destroyCell(i, wx, wy, {})
-        const own = this.owner[i]
-        if (own >= 0) {
-          const el = this.elements.get(own)
-          if (el && el.alive) {
-            el.lost++
-            if (el.kind === 'glyph' && el.lost / Math.max(1, el.cells.length) > 0.3) this.popElement(el, wx, wy, 200)
-            else if (el.kind !== 'glyph' && el.lost / Math.max(1, el.cells.length) > (el.cells.length < 1200 ? 0.6 : 0.85)) this.popElement(el, wx, wy, 200)
-          }
-        }
-      }
+  puffAt(wx: number, wy: number, r: number) {
+    for (let k = 0; k < 6; k++) {
+      this.spawnParticle({
+        x: wx + (Math.random() - 0.5) * r,
+        y: wy + (Math.random() - 0.5) * r,
+        vx: (Math.random() - 0.5) * 80,
+        vy: -40 - Math.random() * 80,
+        life: 0.8,
+        max: 0.8,
+        kind: 'smoke',
+        color: SMOKE_COLORS[(Math.random() * SMOKE_COLORS.length) | 0],
+        size: 3 + Math.random() * 4,
+      })
     }
   }
 
@@ -645,8 +780,7 @@ export class World {
   }
 
   raycast(x: number, y: number, dx: number, dy: number, maxDist: number): { x: number; y: number; hit: boolean } {
-    // step ray in CELL increments
-    const step = CELL * 0.8
+    const step = 4
     let cx = x
     let cy = y
     for (let d = 0; d < maxDist; d += step) {
@@ -654,7 +788,7 @@ export class World {
       cy += dy * step
       if (cx < 0 || cx >= this.W || cy >= this.H) return { x: cx, y: cy, hit: true }
       if (cy < 0) continue
-      if (this.mat[this.idx(Math.floor(cx / CELL), Math.floor(cy / CELL))] !== MAT_EMPTY) {
+      if (this.solidAtWorld(cx, cy)) {
         return { x: cx, y: cy, hit: true }
       }
     }
@@ -662,53 +796,115 @@ export class World {
   }
 
   step(dt: number) {
-    // chunks physics
-    for (let i = this.chunks.length - 1; i >= 0; i--) {
-      const c = this.chunks[i]
-      c.life -= dt
-      if (c.life <= 0) {
-        this.chunks.splice(i, 1)
+    // 1) Dynamic Bodies Physics (Falling, tumbling, bouncing on bedrock floor)
+    const floorY = this.H - 24
+    for (let i = this.dynamicBodies.length - 1; i >= 0; i--) {
+      const b = this.dynamicBodies[i]
+      if (b.destroyed) {
+        this.dynamicBodies.splice(i, 1)
         continue
       }
-      if (!c.settled) {
-        c.vy += 1900 * dt
-        c.vx *= 1 - 0.4 * dt
-        c.x += c.vx * dt
-        c.y += c.vy * dt
-        c.rot += c.vrot * dt
-        // collide with world: check a few sample points along bottom edge
-        const bot = c.gh / 2
-        const samp = [c.x - c.gw / 4, c.x, c.x + c.gw / 4]
-        let grounded = false
-        for (const sx of samp) {
-          if (this.solidAtWorld(sx, c.y + bot + 2)) {
-            grounded = true
-            break
-          }
+
+      // Burning
+      if (b.burning > 0) {
+        b.burning -= dt
+        b.hp -= 24 * dt
+        if (Math.random() < 0.25) {
+          this.spawnParticle({
+            x: b.x + Math.random() * b.w,
+            y: b.y + Math.random() * b.h,
+            vx: (Math.random() - 0.5) * 50,
+            vy: -60 - Math.random() * 60,
+            life: 0.5,
+            max: 0.5,
+            kind: 'ember',
+            color: FIRE_COLORS[(Math.random() * FIRE_COLORS.length) | 0],
+            size: 2,
+            grav: -120,
+          })
         }
-        if (grounded) {
-          if (Math.abs(c.vy) > 140) {
-            c.vy *= -0.28
-            c.vx *= 0.7
-            c.vrot *= 0.6
-          } else {
-            c.settled = true
-            c.vy = 0
-            c.vx *= 0.5
-            c.vrot = 0
-          }
+        if (b.hp <= 0) {
+          this.shatterBody(b, b.x + b.w / 2, b.y + b.h / 2, 220)
+          continue
         }
-        // side collision
-        if (this.solidAtWorld(c.x + Math.sign(c.vx) * (c.gw / 2), c.y)) c.vx *= -0.4
-      } else {
-        c.settleT += dt
-        c.x += c.vx * dt
-        c.vx *= 1 - 4 * dt
       }
-      if (c.y > this.H + 200) this.chunks.splice(i, 1)
+
+      if (!b.settled) {
+        b.vy += 2200 * dt
+        b.vx *= 1 - 0.4 * dt
+        b.x += b.vx * dt
+        b.y += b.vy * dt
+        b.rot += b.vrot * dt
+        b.vrot *= 1 - 0.8 * dt
+
+        // Boundaries
+        if (b.x < 0) {
+          b.x = 0
+          b.vx = -b.vx * 0.4
+          b.vrot *= 0.6
+        } else if (b.x + b.w > this.W) {
+          b.x = this.W - b.w
+          b.vx = -b.vx * 0.4
+          b.vrot *= 0.6
+        }
+
+        // Floor collision
+        if (b.y + b.h >= floorY) {
+          b.y = floorY - b.h
+          if (Math.abs(b.vy) > 130) {
+            b.vy = -b.vy * 0.32
+            b.vx *= 0.65
+            b.vrot *= 0.5
+          } else {
+            b.vy = 0
+            b.settleT += dt
+            if (b.settleT > 0.35) {
+              b.settled = true
+              b.vx = 0
+              b.vrot = 0
+              b.rot = 0
+              this.dynamicBodies.splice(i, 1)
+              this.settledBodies.push(b)
+            }
+          }
+        }
+      }
     }
 
-    // particles
+    // 2) Shards Physics (Fractured glyphs and polygon shards)
+    for (let i = this.shards.length - 1; i >= 0; i--) {
+      const s = this.shards[i]
+      s.life -= dt
+      if (s.life <= 0) {
+        this.shards.splice(i, 1)
+        continue
+      }
+
+      if (!s.settled) {
+        s.vy += 2300 * dt
+        s.vx *= 1 - 0.45 * dt
+        s.x += s.vx * dt
+        s.y += s.vy * dt
+        s.rot += s.vrot * dt
+
+        // Floor bounce
+        if (s.y >= floorY) {
+          s.y = floorY
+          if (Math.abs(s.vy) > 140) {
+            s.vy = -s.vy * 0.3
+            s.vx *= 0.65
+            s.vrot *= 0.55
+          } else {
+            s.settled = true
+            s.vy = 0
+            s.vx *= 0.4
+            s.vrot = 0
+          }
+        }
+      }
+    }
+
+    // 3) Particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i]
       p.life -= dt
@@ -726,63 +922,201 @@ export class World {
       p.y += p.vy * dt
       if (p.rot !== undefined && p.vrot) p.rot += p.vrot * dt
     }
-
-    this.stepBurns(dt)
   }
 
-  // Render world pixels into the level canvas if dirty
-  flushPixels() {
-    if (!this.dirty) return
-    new Uint32Array(this.imgData.data.buffer).set(this.pixBuf)
-    this.levelCtx.putImageData(this.imgData, 0, 0)
-    this.dirty = false
-  }
-
+  // --- Rendering Orchestration ---
   draw(ctx: CanvasRenderingContext2D, camX: number, camY: number, viewW: number, viewH: number) {
-    this.flushPixels()
-    // draw visible region scaled CELL×
-    const sx = Math.max(0, camX / CELL)
-    const sy = Math.max(0, camY / CELL)
-    const sw = Math.min(this.GW - sx, viewW / CELL)
-    const sh = Math.min(this.GH - sy, viewH / CELL)
-    if (sw <= 0 || sh <= 0) return
-    ctx.imageSmoothingEnabled = true
-    ctx.drawImage(this.levelCanvas, sx, sy, sw, sh, sx * CELL - camX, sy * CELL - camY, sw * CELL, sh * CELL)
+    const isHd = ConfigManager.get().getConfig().visual.hdVectorMode
 
-    // chunks
-    const isHdVector = ConfigManager.get().getConfig().visual.hdVectorMode
-    for (const c of this.chunks) {
+    // Viewport boundaries for culling
+    const vLeft = camX - 80
+    const vRight = camX + viewW + 80
+    const vTop = camY - 80
+    const vBottom = camY + viewH + 80
+
+    // 1) Bedrock Floor (Sleek dark foundation slab at bottom)
+    const floorY = this.H - 28
+    if (floorY < vBottom) {
       ctx.save()
-      ctx.translate(c.x - camX, c.y - camY)
-      ctx.rotate(c.rot)
-      const alpha = c.life < 0.7 ? Math.max(0, c.life / 0.7) : 1
-      ctx.globalAlpha = alpha
-
-      if (isHdVector && c.isVector) {
-        if (c.vectorText && c.vectorFont) {
-          ctx.font = c.vectorFont
-          ctx.fillStyle = c.vectorColor || '#ffffff'
-          ctx.textBaseline = 'middle'
-          ctx.textAlign = 'center'
-          ctx.imageSmoothingEnabled = true
-          ctx.shadowColor = 'rgba(0, 0, 0, 0.65)'
-          ctx.shadowBlur = 4
-          ctx.fillText(c.vectorText, 0, 0)
-        } else if (c.vectorImage) {
-          ctx.imageSmoothingEnabled = true
-          const w = c.vectorW || c.gw * CELL
-          const h = c.vectorH || c.gh * CELL
-          ctx.drawImage(c.vectorImage, -w / 2, -h / 2, w, h)
-        } else {
-          ctx.imageSmoothingEnabled = false
-          ctx.drawImage(c.canvas, (-c.gw / 2) * CELL, (-c.gh / 2) * CELL, c.gw * CELL, c.gh * CELL)
-        }
-      } else {
-        ctx.imageSmoothingEnabled = false
-        ctx.drawImage(c.canvas, (-c.gw / 2) * CELL, (-c.gh / 2) * CELL, c.gw * CELL, c.gh * CELL)
+      const scrY = floorY - camY
+      ctx.fillStyle = '#111319'
+      ctx.fillRect(-camX, scrY, this.W, 140)
+      // Glowing neon edge line
+      ctx.strokeStyle = '#f59e0b'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(-camX, scrY)
+      ctx.lineTo(-camX + this.W, scrY)
+      ctx.stroke()
+      // Hazard pattern accent
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.12)'
+      for (let hx = 0; hx < this.W; hx += 40) {
+        ctx.fillRect(hx - camX, scrY + 2, 20, 6)
       }
       ctx.restore()
     }
+
+    // 2) Anchored Solid Bodies (100% Crisp Native Vector Typography & Shapes)
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i]
+      if (!b.anchored || b.destroyed) continue
+      // Viewport culling
+      if (b.x + b.w < vLeft || b.x > vRight || b.y + b.h < vTop || b.y > vBottom) continue
+
+      const scrX = b.x - camX
+      const scrY = b.y - camY
+
+      if (b.kind === 'word') {
+        ctx.save()
+        ctx.font = b.font || '16px sans-serif'
+        ctx.fillStyle = b.color || '#ffffff'
+        ctx.textBaseline = 'alphabetic'
+        const base = b.baseY !== undefined ? b.baseY - camY : scrY + b.h * 0.8
+        ctx.fillText(b.text || '', scrX, base)
+        if (b.underline) {
+          ctx.fillRect(scrX, base + 2, b.w, 1.5)
+        }
+        // Draw bullet hole / damage decals
+        if (b.damageDecals.length > 0) {
+          ctx.fillStyle = 'rgba(25, 25, 25, 0.8)'
+          for (const d of b.damageDecals) {
+            ctx.beginPath()
+            ctx.arc(scrX + d.rx, scrY + d.ry, d.r, 0, Math.PI * 2)
+            ctx.fill()
+          }
+        }
+        ctx.restore()
+      } else if (b.kind === 'box') {
+        drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, b.shadow)
+        // Decals
+        if (b.damageDecals.length > 0) {
+          ctx.fillStyle = 'rgba(20, 20, 20, 0.75)'
+          for (const d of b.damageDecals) {
+            ctx.beginPath()
+            ctx.arc(scrX + d.rx, scrY + d.ry, d.r, 0, Math.PI * 2)
+            ctx.fill()
+          }
+        }
+      } else if (b.kind === 'image') {
+        if (b.image && b.image.complete && b.image.naturalWidth > 0) {
+          ctx.save()
+          if (b.radius) {
+            applyRadiusPath(ctx, scrX, scrY, b.w, b.h, b.radius)
+            ctx.clip()
+          }
+          ctx.drawImage(b.image, scrX, scrY, b.w, b.h)
+          // Scorch / Decals
+          if (b.damageDecals.length > 0) {
+            ctx.fillStyle = 'rgba(20, 20, 20, 0.82)'
+            for (const d of b.damageDecals) {
+              ctx.beginPath()
+              ctx.arc(scrX + d.rx, scrY + d.ry, d.r, 0, Math.PI * 2)
+              ctx.fill()
+            }
+          }
+          ctx.restore()
+        }
+      }
+    }
+
+    // 3) Settled Bodies (Fallen words and cards at rest on the ground)
+    for (let i = 0; i < this.settledBodies.length; i++) {
+      const b = this.settledBodies[i]
+      if (b.destroyed) continue
+      if (b.x + b.w < vLeft || b.x > vRight || b.y + b.h < vTop || b.y > vBottom) continue
+
+      const scrX = b.x - camX
+      const scrY = b.y - camY
+      if (b.kind === 'word') {
+        ctx.save()
+        ctx.font = b.font || '16px sans-serif'
+        ctx.fillStyle = b.color || '#ffffff'
+        ctx.textBaseline = 'alphabetic'
+        const base = b.baseY !== undefined ? b.baseY - camY : scrY + b.h * 0.8
+        ctx.fillText(b.text || '', scrX, base)
+        ctx.restore()
+      } else if (b.kind === 'box') {
+        drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, null)
+      } else if (b.kind === 'image' && b.image) {
+        ctx.drawImage(b.image, scrX, scrY, b.w, b.h)
+      }
+    }
+
+    // 4) Dynamic Dislodged Bodies (Tumbling through air under gravity)
+    for (let i = 0; i < this.dynamicBodies.length; i++) {
+      const b = this.dynamicBodies[i]
+      if (b.destroyed) continue
+      const cx = b.x + b.w / 2 - camX
+      const cy = b.y + b.h / 2 - camY
+      if (cx < -100 || cx > viewW + 100 || cy < -100 || cy > viewH + 100) continue
+
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.rotate(b.rot)
+
+      if (b.kind === 'word') {
+        ctx.font = b.font || '16px sans-serif'
+        ctx.fillStyle = b.color || '#ffffff'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.55)'
+        ctx.shadowBlur = 6
+        ctx.fillText(b.text || '', 0, 0)
+      } else if (b.kind === 'box') {
+        drawVectorBox(ctx, -b.w / 2, -b.h / 2, b.w, b.h, b.radius, b.bg, b.grad, b.border, null)
+      } else if (b.kind === 'image' && b.image) {
+        ctx.drawImage(b.image, -b.w / 2, -b.h / 2, b.w, b.h)
+      }
+      ctx.restore()
+    }
+
+    // 5) Fractured Shards (Polygonal glass/rock shards & flying letter glyphs)
+    for (let i = 0; i < this.shards.length; i++) {
+      const s = this.shards[i]
+      const sx = s.x - camX
+      const sy = s.y - camY
+      if (sx < -60 || sx > viewW + 60 || sy < -60 || sy > viewH + 60) continue
+
+      const alpha = s.life < 0.8 ? Math.max(0, s.life / 0.8) : 1
+      ctx.save()
+      ctx.translate(sx, sy)
+      ctx.rotate(s.rot)
+      ctx.globalAlpha = alpha
+
+      if (s.kind === 'glyph' && s.text) {
+        ctx.font = s.font || '16px sans-serif'
+        ctx.fillStyle = s.color || '#ffffff'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'
+        ctx.shadowBlur = 4
+        ctx.fillText(s.text, 0, 0)
+      } else if (s.kind === 'polygon' && s.poly && s.poly.length >= 3) {
+        ctx.beginPath()
+        ctx.moveTo(s.poly[0].x, s.poly[0].y)
+        for (let pIdx = 1; pIdx < s.poly.length; pIdx++) {
+          ctx.lineTo(s.poly[pIdx].x, s.poly[pIdx].y)
+        }
+        ctx.closePath()
+
+        if (s.image && s.image.complete && s.image.naturalWidth > 0) {
+          ctx.save()
+          ctx.clip()
+          ctx.drawImage(s.image, -(s.uvX ?? 0), -(s.uvY ?? 0), s.uvW ?? 100, s.uvH ?? 100)
+          ctx.restore()
+        } else {
+          ctx.fillStyle = s.colorStr || '#718096'
+          ctx.fill()
+        }
+
+        // Shard edge highlight
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
     ctx.globalAlpha = 1
   }
 
@@ -843,8 +1177,208 @@ export class World {
   }
 }
 
-// ---- color helpers (ABGR packed for little-endian ImageData) ----
+// --- Vector Helpers ---
+function applyRadiusPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rad: [number, number, number, number]
+) {
+  const maxr = Math.min(w, h) / 2
+  const rtl = Math.min(rad[0], maxr)
+  const rtr = Math.min(rad[1], maxr)
+  const rbr = Math.min(rad[2], maxr)
+  const rbl = Math.min(rad[3], maxr)
 
+  ctx.beginPath()
+  ctx.moveTo(x + rtl, y)
+  ctx.lineTo(x + w - rtr, y)
+  if (rtr > 0) ctx.quadraticCurveTo(x + w, y, x + w, y + rtr)
+  ctx.lineTo(x + w, y + h - rbr)
+  if (rbr > 0) ctx.quadraticCurveTo(x + w, y + h, x + w - rbr, y + h)
+  ctx.lineTo(x + rbl, y + h)
+  if (rbl > 0) ctx.quadraticCurveTo(x, y + h, x, y + h - rbl)
+  ctx.lineTo(x, y + rtl)
+  if (rtl > 0) ctx.quadraticCurveTo(x, y, x + rtl, y)
+  ctx.closePath()
+}
+
+function drawVectorBox(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius?: [number, number, number, number] | null,
+  bg?: string | null,
+  grad?: { type: 'linear'; angle: number; stops: { c: string; p: number }[] } | null,
+  border?: { w: number; c: string } | null,
+  shadow?: { color: string; x: number; y: number; blur: number } | null
+) {
+  ctx.save()
+  if (shadow && shadow.blur > 0) {
+    ctx.shadowColor = shadow.color
+    ctx.shadowBlur = shadow.blur
+    ctx.shadowOffsetX = shadow.x
+    ctx.shadowOffsetY = shadow.y
+  }
+
+  const rad = radius || [0, 0, 0, 0]
+  applyRadiusPath(ctx, x, y, w, h, rad)
+
+  if (grad && grad.stops && grad.stops.length >= 2) {
+    const radAngle = ((grad.angle - 90) * Math.PI) / 180
+    const cx = x + w / 2
+    const cy = y + h / 2
+    const diag = Math.hypot(w, h) / 2
+    const x0 = cx - Math.cos(radAngle) * diag
+    const y0 = cy - Math.sin(radAngle) * diag
+    const x1 = cx + Math.cos(radAngle) * diag
+    const y1 = cy + Math.sin(radAngle) * diag
+    const lg = ctx.createLinearGradient(x0, y0, x1, y1)
+    for (const stop of grad.stops) {
+      lg.addColorStop(Math.max(0, Math.min(1, stop.p)), stop.c)
+    }
+    ctx.fillStyle = lg
+    ctx.fill()
+  } else if (bg) {
+    ctx.fillStyle = bg
+    ctx.fill()
+  }
+
+  if (border && border.w > 0 && border.c) {
+    ctx.strokeStyle = border.c
+    ctx.lineWidth = border.w
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+// Generate jagged convex polygon shards for cards, boxes, and images
+function generatePolygonShards(
+  body: SolidBody,
+  hitX: number,
+  hitY: number,
+  force: number
+): ShardPiece[] {
+  const shards: ShardPiece[] = []
+  const w = body.w
+  const h = body.h
+  const localX = Math.max(w * 0.15, Math.min(w * 0.85, hitX - body.x))
+  const localY = Math.max(h * 0.15, Math.min(h * 0.85, hitY - body.y))
+
+  const pts: { x: number; y: number }[] = [
+    { x: 0, y: 0 },
+    { x: w * (0.35 + Math.random() * 0.3), y: 0 },
+    { x: w, y: 0 },
+    { x: w, y: h * (0.35 + Math.random() * 0.3) },
+    { x: w, y: h },
+    { x: w * (0.35 + Math.random() * 0.3), y: h },
+    { x: 0, y: h },
+    { x: 0, y: h * (0.35 + Math.random() * 0.3) },
+  ]
+
+  for (let i = 0; i < pts.length; i++) {
+    const p1 = pts[i]
+    const p2 = pts[(i + 1) % pts.length]
+
+    const cx = (localX + p1.x + p2.x) / 3
+    const cy = (localY + p1.y + p2.y) / 3
+
+    const poly = [
+      { x: localX - cx, y: localY - cy },
+      { x: p1.x - cx, y: p1.y - cy },
+      { x: p2.x - cx, y: p2.y - cy },
+    ]
+
+    const wx = body.x + cx
+    const wy = body.y + cy
+    const dx = cx - localX
+    const dy = cy - localY
+    const d = Math.hypot(dx, dy) || 1
+    const blastSpeed = force * (0.6 + Math.random() * 0.6)
+
+    shards.push({
+      x: wx,
+      y: wy,
+      vx: body.vx * 0.4 + (dx / d) * blastSpeed + (Math.random() - 0.5) * 140,
+      vy: body.vy * 0.4 + (dy / d) * blastSpeed - 120 - Math.random() * 160,
+      rot: 0,
+      vrot: (Math.random() - 0.5) * (10 + force / 60),
+      life: 3.2 + Math.random() * 1.6,
+      maxLife: 4.8,
+      kind: 'polygon',
+      poly,
+      colorStr: body.bg || '#7a828e',
+      border: body.border,
+      image: body.image,
+      uvX: cx,
+      uvY: cy,
+      uvW: w,
+      uvH: h,
+      settled: false,
+    })
+  }
+
+  return shards
+}
+
+// Generate letter/syllable fragments from fractured words
+function generateWordShards(
+  body: SolidBody,
+  hitX: number,
+  hitY: number,
+  force: number
+): ShardPiece[] {
+  const shards: ShardPiece[] = []
+  const txt = body.text || ''
+  if (!txt) return shards
+
+  const clusters: { str: string; relX: number }[] = []
+  if (txt.length <= 3) {
+    for (let i = 0; i < txt.length; i++) {
+      clusters.push({ str: txt[i], relX: (body.w / txt.length) * (i + 0.5) })
+    }
+  } else {
+    for (let i = 0; i < txt.length; i += 2) {
+      const sub = txt.slice(i, i + 2)
+      clusters.push({ str: sub, relX: (body.w / txt.length) * (i + sub.length / 2) })
+    }
+  }
+
+  for (const c of clusters) {
+    const wx = body.x + c.relX
+    const wy = body.y + body.h / 2
+    let dx = wx - hitX
+    let dy = wy - hitY
+    const d = Math.hypot(dx, dy) || 1
+    dx /= d
+    dy /= d
+    const mag = force * (0.65 + Math.random() * 0.65)
+
+    shards.push({
+      x: wx,
+      y: wy,
+      vx: body.vx * 0.35 + dx * mag + (Math.random() - 0.5) * 160,
+      vy: body.vy * 0.35 + dy * mag - 140 - Math.random() * 180,
+      rot: 0,
+      vrot: (Math.random() - 0.5) * (14 + force / 40),
+      life: 3.5 + Math.random() * 1.5,
+      maxLife: 5.0,
+      kind: 'glyph',
+      text: c.str,
+      font: body.font,
+      color: body.color,
+      settled: false,
+    })
+  }
+
+  return shards
+}
+
+// Color helpers
 export function packColor(hex: string): number {
   const h = hex.replace('#', '')
   const r = parseInt(h.slice(0, 2), 16)
@@ -865,35 +1399,4 @@ export function darken(c: number, f: number): number {
   const g = Math.floor(((c >>> 8) & 255) * f)
   const b = Math.floor(((c >>> 16) & 255) * f)
   return (255 << 24) | (b << 16) | (g << 8) | r
-}
-
-// split cells into connected components (4-neigh), max N components; returns component cell arrays
-function splitComponents(cells: number[], GW: number, maxComps: number): number[][] {
-  const set = new Set(cells)
-  const comps: number[][] = []
-  const seen = new Set<number>()
-  for (const start of cells) {
-    if (seen.has(start)) continue
-    const comp: number[] = []
-    const stack = [start]
-    seen.add(start)
-    while (stack.length && comp.length < 30000) {
-      const i = stack.pop()!
-      comp.push(i)
-      const cx = i % GW
-      const neigh = [i - 1, i + 1, i - GW, i + GW]
-      for (let k = 0; k < 4; k++) {
-        const j = neigh[k]
-        if (k === 0 && cx === 0) continue
-        if (k === 1 && cx === GW - 1) continue
-        if (set.has(j) && !seen.has(j)) {
-          seen.add(j)
-          stack.push(j)
-        }
-      }
-    }
-    comps.push(comp)
-    if (comps.length >= maxComps) break
-  }
-  return comps
 }

@@ -164,7 +164,11 @@ export class DestroyEngine {
     const bottomPx = 130 // breathing room below the page so the player is visible above the HUD
     this.world.onElementGone = undefined
     this.world.init(level.W, level.H + skyPx + bottomPx)
-    this.world.loadFromLoader(level.colors, level.owners, level.elements, pageGW, pageGH)
+    if (level.bodies && level.bodies.length > 0) {
+      this.world.loadBodies(level.bodies, level.W, level.H, skyPx)
+    } else {
+      this.world.loadFromLoader(level.colors, level.owners, level.elements, pageGW, pageGH)
+    }
     this.bg = buildBackgrounds(Math.max(900, this.viewW), Math.max(700, this.viewH), opts.bgTheme)
 
     // spawn player: topmost surface (page roof) with headroom — like the original

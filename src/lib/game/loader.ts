@@ -3,13 +3,14 @@
 // per-character glyphs and images, renders a layout canvas, and builds the
 // 2px grid (colors + element ownership) for the World.
 
-import { CELL, MAT_SOLID, LevelElement, packColor } from './world'
+import { CELL, MAT_SOLID, LevelElement, SolidBody, packColor } from './world'
 
 export type LoadProgress = (msg: string, pct: number) => void
 
 export type LevelData = {
   W: number // world px width (layout px)
   H: number // world px height
+  bodies: SolidBody[]
   colors: Uint32Array // grid res ABGR
   owners: Int32Array // grid res element ids (-1 bg)
   elements: Map<number, LevelElement>
@@ -408,107 +409,58 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
               const font = `${style}${weight} ${fs}px ${fam}`
               const range = idoc.createRange()
               const len = txt.length
-              const isArabic = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(txt)
-              if (isArabic) {
-                // Arabic script: letters join, so emit one element per word (keeps shaping)
-                let i = 0
-                while (i < len && glyphCount < MAX_GLYPHS) {
-                  while (i < len && !txt[i].trim()) i++
-                  if (i >= len) break
-                  let j = i
-                  while (j < len && txt[j].trim()) j++
-                  if (j > i) {
-                    try {
-                      range.setStart(tn, i)
-                      range.setEnd(tn, j)
-                      const r = range.getBoundingClientRect()
-                      if (r.width > 0 && r.height > 0 && r.right > -50 && r.left < W + 50 && r.bottom > -20 && r.top < H && r.top > -10) {
-                        const wordText = txt.slice(i, j)
-                        const el = newElement('glyph', Math.max(9, Math.ceil(r.width) * Math.ceil(r.height)))
-                        el.label = wordText
-                        el.text = wordText
-                        el.font = font
-                        el.colorStr = fill
-                        el.w = r.width
-                        el.h = r.height
-                        el.isWord = true
-                        el.tag = tag
-                        if (anchor && href) {
-                          el.href = href
-                          el.semanticRole = 'portal'
-                        } else if (isHeading) {
-                          el.semanticRole = 'structure'
-                        } else if (isButton) {
-                          el.semanticRole = 'trigger'
-                        } else {
-                          el.semanticRole = 'platform'
-                        }
-                        glyphs.push({
-                          ch: wordText,
-                          x: r.left,
-                          y: r.top,
-                          w: r.width,
-                          h: r.height,
-                          base: r.bottom - (r.height - fs * 0.78) * 0.32,
-                          font,
-                          color: fill,
-                          underline: (pcs.textDecorationLine || '').includes('underline'),
-                          el,
-                        })
-                        glyphCount++
-                      }
-                    } catch {
-                      /* ignore */
-                    }
-                  }
-                  i = j
-                }
-              } else {
-                for (let i = 0; i < len && glyphCount < MAX_GLYPHS; i++) {
-                  const ch = txt[i]
-                  if (!ch.trim()) continue
+              // Word-level extraction: splits text by whitespace, preserving intact words as crisp solid bodies for ALL languages
+              let i = 0
+              while (i < len && glyphCount < MAX_GLYPHS) {
+                while (i < len && !txt[i].trim()) i++
+                if (i >= len) break
+                let j = i
+                while (j < len && txt[j].trim()) j++
+                if (j > i) {
                   try {
                     range.setStart(tn, i)
-                    range.setEnd(tn, i + 1)
+                    range.setEnd(tn, j)
                     const r = range.getBoundingClientRect()
-                    if (r.width <= 0 || r.height <= 0 || r.right < -50 || r.left > W + 50 || r.bottom < -20 || r.top > H) continue
-                    if (r.top < -10) continue
-                    const el = newElement('glyph', Math.max(9, Math.ceil(r.width) * Math.ceil(fs)))
-                    el.label = ch
-                    el.text = ch
-                    el.font = font
-                    el.colorStr = fill
-                    el.w = r.width
-                    el.h = r.height
-                    el.isWord = false
-                    el.tag = tag
-                    if (anchor && href) {
-                      el.href = href
-                      el.semanticRole = 'portal'
-                    } else if (isHeading) {
-                      el.semanticRole = 'structure'
-                    } else if (isButton) {
-                      el.semanticRole = 'trigger'
-                    } else {
-                      el.semanticRole = 'platform'
+                    if (r.width > 0 && r.height > 0 && r.right > -50 && r.left < W + 50 && r.bottom > -20 && r.top < H && r.top > -10) {
+                      const wordText = txt.slice(i, j)
+                      const el = newElement('glyph', Math.max(9, Math.ceil(r.width) * Math.ceil(r.height)))
+                      el.label = wordText
+                      el.text = wordText
+                      el.font = font
+                      el.colorStr = fill
+                      el.w = r.width
+                      el.h = r.height
+                      el.isWord = true
+                      el.tag = tag
+                      if (anchor && href) {
+                        el.href = href
+                        el.semanticRole = 'portal'
+                      } else if (isHeading) {
+                        el.semanticRole = 'structure'
+                      } else if (isButton) {
+                        el.semanticRole = 'trigger'
+                      } else {
+                        el.semanticRole = 'platform'
+                      }
+                      glyphs.push({
+                        ch: wordText,
+                        x: r.left,
+                        y: r.top,
+                        w: r.width,
+                        h: r.height,
+                        base: r.bottom - (r.height - fs * 0.78) * 0.32,
+                        font,
+                        color: fill,
+                        underline: (pcs.textDecorationLine || '').includes('underline'),
+                        el,
+                      })
+                      glyphCount++
                     }
-                    glyphs.push({
-                      ch,
-                      x: r.left,
-                      y: r.top,
-                      w: r.width,
-                      h: r.height,
-                      base: r.bottom - (r.height - fs * 0.78) * 0.32,
-                      font,
-                      color: fill,
-                      underline: (pcs.textDecorationLine || '').includes('underline'),
-                      el,
-                    })
-                    glyphCount++
                   } catch {
                     /* ignore */
                   }
                 }
+                i = j
               }
             }
           }
@@ -854,12 +806,92 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
       if (b.el && b.el.cells.length > 0) elements.set(b.el.id, b.el)
     }
 
+    // Assemble Solid Bodies (Words, Boxes, Images)
+    const bodies: SolidBody[] = []
+    let bodyId = 0
+
+    // 1) Words (from glyphs)
+    for (const g of glyphs) {
+      const mass = Math.max(8, Math.round(g.w * g.h * 0.07))
+      const hp = Math.max(15, Math.round(15 + g.w * 0.35))
+      const b: SolidBody = {
+        id: bodyId++,
+        kind: 'word',
+        x: g.x,
+        y: g.y,
+        w: g.w,
+        h: g.h,
+        baseY: g.base,
+        vx: 0,
+        vy: 0,
+        rot: 0,
+        vrot: 0,
+        mass,
+        hp,
+        maxHp: hp,
+        anchored: true,
+        settled: false,
+        settleT: 0,
+        destroyed: false,
+        burning: 0,
+        text: g.ch,
+        font: g.font,
+        color: g.color,
+        underline: g.underline,
+        tag: g.el.tag,
+        semanticRole: g.el.semanticRole,
+        href: g.el.href,
+        damageDecals: [],
+      }
+      bodies.push(b)
+    }
+
+    // 2) Boxes & Images
+    for (const bx of boxes) {
+      if (!bx.el) continue // scenery
+      const isImg = bx.image !== null
+      const mass = Math.max(25, Math.round(bx.w * bx.h * 0.03))
+      const hp = Math.max(30, Math.round(30 + Math.sqrt(bx.w * bx.h) * 1.2))
+      const b: SolidBody = {
+        id: bodyId++,
+        kind: isImg ? 'image' : 'box',
+        x: bx.x,
+        y: bx.y,
+        w: bx.w,
+        h: bx.h,
+        vx: 0,
+        vy: 0,
+        rot: 0,
+        vrot: 0,
+        mass,
+        hp,
+        maxHp: hp,
+        anchored: true,
+        settled: false,
+        settleT: 0,
+        destroyed: false,
+        burning: 0,
+        bg: bx.bg,
+        grad: bx.grad,
+        radius: bx.radius,
+        border: bx.border,
+        shadow: bx.shadow,
+        image: bx.image,
+        imgFit: bx.imgFit,
+        tag: bx.el.tag,
+        semanticRole: bx.el.semanticRole,
+        href: bx.el.href,
+        damageDecals: [],
+      }
+      bodies.push(b)
+    }
+
     // title
     const title = idoc.title || baseUrl
 
     cleanup()
 
-    return { W, H, colors, owners, elements, title, backdropCanvas: backdropCv }
+    return { W, H, bodies, colors, owners, elements, title, backdropCanvas: backdropCv }
   } catch (e) {
     cleanup()
     throw e

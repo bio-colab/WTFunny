@@ -207,13 +207,12 @@ export function fireWeapon(
         cx += cos * step
         cy += sin * step
         if (cx < 0 || cx > world.W || cy > world.H) break
-        if (cy < 0) continue
-        const gi = world.idx(Math.floor(cx / CELL), Math.floor(cy / CELL))
-        if (world.mat[gi] !== 0) {
+        if (world.solidAtWorld(cx, cy)) {
           hitPts.push({ x: cx, y: cy })
-          // carve
+          world.hitBodyAt(cx, cy, effDmg, cos * 340, sin * 340)
+          // carve & blast
           if (hitPts.length % 2 === 1) {
-            world.damageCircle(cx, cy, carveR, { debris: true, countAsDestroy: true })
+            world.damageCircle(cx, cy, carveR, { debris: true, countAsDestroy: true, impulse: 450 })
             if (Math.random() < 0.12) sound.hit('block', 0.5, pan)
           }
         }
@@ -343,8 +342,9 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
         break
       }
       if (b.y < 0) continue
-      const gi = world.idx(Math.floor(b.x / CELL), Math.floor(b.y / CELL))
-      if (b.x >= 0 && b.y >= 0 && b.x < world.W && b.y < world.H && world.mat[gi] !== 0) {
+      if (b.x >= 0 && b.y >= 0 && b.x < world.W && b.y < world.H && world.solidAtWorld(b.x, b.y)) {
+        // Direct kinetic hit on solid body
+        world.hitBodyAt(b.x, b.y, b.dmg, b.vx * 0.04, b.vy * 0.04)
         // impact: small clean hole (sparser for a nicer look)
         if (Math.random() < 0.8) {
           world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true })
