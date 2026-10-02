@@ -292,7 +292,7 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
         isImg ||
         inlineSvg
 
-      const visibleBox = (hasBg || parseColor(cs.borderTopColor) || shadow) && w >= 3 && h >= 3 && boxCount < MAX_BOXES
+      const visibleBox = (hasBg || parseColor(cs.borderTopColor)) && w >= 3 && h >= 3 && boxCount < MAX_BOXES
 
       let box: DrawBox | null = null
       if (visibleBox) {
@@ -549,12 +549,6 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
     const paintBox = (c: CanvasRenderingContext2D, b: DrawBox) => {
       c.save()
       c.globalAlpha = b.opacity
-      if (b.shadow) {
-        c.shadowColor = b.shadow.color
-        c.shadowBlur = b.shadow.blur
-        c.shadowOffsetX = b.shadow.x
-        c.shadowOffsetY = b.shadow.y
-      }
       rr(c, b.x, b.y, b.w, b.h, b.radius)
       if (b.grad) {
         const rad = (b.grad.angle * Math.PI) / 180
@@ -573,7 +567,6 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
       }
       c.fill()
       if (b.border) {
-        if (b.shadow) c.shadowColor = 'transparent'
         c.strokeStyle = b.border.c
         c.lineWidth = b.border.w * 2
         rr(c, b.x + b.border.w / 2, b.y + b.border.w / 2, b.w - b.border.w, b.h - b.border.w, b.radius)
@@ -584,25 +577,11 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
 
     for (const b of boxes) {
       if (!b.el) {
-        // Scenery container: paint onto backdrop sheet (with shadows)
+        // Scenery container: paint onto backdrop sheet (open air inside)
         paintBox(bctx, b)
       } else {
-        // Interactive platform element:
-        // Draw soft shadow on backdrop canvas so elements pop visually
-        if (b.shadow) {
-          bctx.save()
-          bctx.globalAlpha = b.opacity * 0.55
-          bctx.shadowColor = b.shadow.color
-          bctx.shadowBlur = b.shadow.blur
-          bctx.shadowOffsetX = b.shadow.x
-          bctx.shadowOffsetY = b.shadow.y
-          rr(bctx, b.x, b.y, b.w, b.h, b.radius)
-          bctx.fillStyle = b.shadow.color
-          bctx.fill()
-          bctx.restore()
-        }
-        // Paint crisp solid element onto cv (without shadow blur so voxels remain sharp)
-        paintBox(ctx, { ...b, shadow: null })
+        // Interactive platform element: paint onto elements canvas
+        paintBox(ctx, b)
       }
     }
 
