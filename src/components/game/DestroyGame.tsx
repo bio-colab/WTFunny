@@ -287,6 +287,7 @@ export default function DestroyGame() {
         {/* Main Header */}
         <header className={`dw-head ${cinemaMode ? 'dw-head-collapsed' : ''}`}>
           <div className="dw-title">
+            <img src="/logo.svg" alt="جحدر" className="w-8 h-8 rounded-md shrink-0 shadow-sm" />
             <span className="dw-logo-badge">⚔️ جَحْدَر</span>
             <span className="name">قاهر عمالقة الويب</span>
             <span className="by">JAHDAR // Web Demolition</span>

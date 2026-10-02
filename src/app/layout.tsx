@@ -30,6 +30,11 @@ export const metadata: Metadata = {
     description: "الفارس الصغير في مواجهة عمالقة الويب — حوّل أي موقع لساحة معركة بكسلية فيزيائية",
     type: "website",
   },
+  icons: {
+    icon: "/logo.svg",
+    shortcut: "/logo.svg",
+    apple: "/logo.svg",
+  },
 };
 
 export default function RootLayout({

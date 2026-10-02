@@ -1,7 +1,7 @@
 # 🗡️ جَحْدَر // JAHDAR — قاهر عمالقة الويب
 
 <p align="center">
-  <img src="public/logo.svg" alt="شعار جحدر - JAHDAR" width="120" height="120" />
+  <img src="public/logo.svg" alt="شعار جحدر - JAHDAR" width="160" height="160" />
 </p>
 
 <p align="center">
