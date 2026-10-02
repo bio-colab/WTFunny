@@ -50,6 +50,8 @@ type DrawGlyph = {
   color: string
   underline: boolean
   el: LevelElement
+  fs: number
+  blockId: number
 }
 
 function parseColor(s: string | null | undefined): string | null {
@@ -161,15 +163,49 @@ function parseBoxShadow(s: string | null | undefined): { color: string; x: numbe
   return null
 }
 
-const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'head', 'meta', 'link', 'title', 'iframe', 'br', 'source', 'track', 'param', 'object', 'embed'])
+const SKIP_TAGS = new Set([
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'head',
+  'meta',
+  'link',
+  'title',
+  'iframe',
+  'br',
+  'source',
+  'track',
+  'param',
+  'object',
+  'embed',
+  'sup',
+  'sub',
+])
+
+const SKIP_CLASSES = [
+  'mw-jump-link',
+  'mw-editsection',
+  'noprint',
+  'navbox',
+  'vector-menu',
+  'visually-hidden',
+  'sr-only',
+  'reference',
+  'citation',
+  'reflist',
+  'mw-indicator',
+  'hatnote',
+  'infobox-navbar',
+]
 
 export async function buildLevel(html: string, baseUrl: string, layoutW: number, onProgress: LoadProgress): Promise<LevelData> {
   onProgress('تحضير الصفحة…', 0.12)
 
-  // sandboxed iframe
+  // sandboxed iframe positioned in live DOM for full subpixel layout accuracy
   const iframe = document.createElement('iframe')
   iframe.sandbox.add('allow-same-origin')
-  iframe.style.cssText = `position:fixed;left:-99999px;top:0;width:${layoutW}px;height:900px;visibility:hidden;border:0;`
+  iframe.style.cssText = `position:fixed;left:0;top:0;width:${layoutW}px;height:3600px;z-index:-9999;opacity:0.001;pointer-events:none;border:0;`
   document.body.appendChild(iframe)
 
   const cleanup = () => {
@@ -265,16 +301,29 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
     }
 
     // ---- pass 1: collect draw commands ----
-    const walk = (node: Element) => {
+    let blockIdCounter = 0
+    const walk = (node: Element, curBlockId = 0) => {
       if (boxes.length + glyphs.length > MAX_BOXES + MAX_GLYPHS) return
-      if (SKIP_TAGS.has(node.tagName.toLowerCase())) return
+      const tag = node.tagName.toLowerCase()
+      if (SKIP_TAGS.has(tag)) return
+      if (node.className && typeof node.className === 'string') {
+        const cls = node.className.toLowerCase()
+        if (SKIP_CLASSES.some((sc) => cls.includes(sc))) return
+      }
       const cs = win.getComputedStyle(node)
       if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return
       const op = parseFloat(cs.opacity || '1')
       if (op < 0.02) return
 
+      let blockId = curBlockId
+      const isButton = tag === 'button' || node.getAttribute('role') === 'button'
+      const isHeading = /^h[1-6]$/.test(tag)
+      const isBlockTag = /^(p|h[1-6]|li|blockquote|pre|td|th|dt|dd|article|section|header|footer|aside)$/i.test(tag) || isButton || isHeading
+      if (isBlockTag) {
+        blockId = ++blockIdCounter
+      }
+
       const rect = node.getBoundingClientRect()
-      const tag = node.tagName.toLowerCase()
       const x = rect.left
       const y = rect.top
       const w = rect.width
@@ -284,8 +333,6 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
       const inlineSvg = tag === 'svg'
       const anchor = node.closest('a') as HTMLAnchorElement | null
       const href = anchor ? anchor.getAttribute('href') : null
-      const isButton = tag === 'button' || node.getAttribute('role') === 'button'
-      const isHeading = /^h[1-6]$/.test(tag)
       const shadow = parseBoxShadow(cs.boxShadow)
       const hasBg =
         parseColor(cs.backgroundColor) !== null ||
@@ -453,6 +500,8 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
                         color: fill,
                         underline: (pcs.textDecorationLine || '').includes('underline'),
                         el,
+                        fs,
+                        blockId,
                       })
                       glyphCount++
                     }
@@ -472,12 +521,149 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
         if (child.tagName.toLowerCase() === 'svg' && !inlineSvg) {
           // svg wrapper handled separately
         }
-        walk(child)
+        walk(child, blockId)
       }
     }
 
-    // root containers that paint a bg over the whole page handled by pageBg already; walk from body
-    for (const child of Array.from(body.children)) walk(child)
+    // root containers walk from body
+    for (const child of Array.from(body.children)) walk(child, 0)
+
+    // ---- PASS 1.5: COMPONENT MAP LAYOUT NORMALIZATION ----
+    const blockMap = new Map<number, DrawGlyph[]>()
+    for (const g of glyphs) {
+      let list = blockMap.get(g.blockId)
+      if (!list) {
+        list = []
+        blockMap.set(g.blockId, list)
+      }
+      list.push(g)
+    }
+
+    for (const [, words] of blockMap) {
+      if (words.length === 0) continue
+
+      // Sort words vertically by top
+      words.sort((a, b) => a.y - b.y)
+
+      // Partition into visual lines
+      const lines: DrawGlyph[][] = []
+      let curLine: DrawGlyph[] = []
+      let curY = -1e9
+      let curH = 16
+
+      for (const w of words) {
+        if (curLine.length === 0) {
+          curLine.push(w)
+          curY = w.y
+          curH = w.h
+        } else {
+          if (Math.abs(w.y - curY) <= curH * 0.48) {
+            curLine.push(w)
+            curY = Math.min(curY, w.y)
+          } else {
+            lines.push(curLine)
+            curLine = [w]
+            curY = w.y
+            curH = w.h
+          }
+        }
+      }
+      if (curLine.length > 0) lines.push(curLine)
+
+      // Normalize each line:
+      for (const line of lines) {
+        line.sort((a, b) => a.x - b.x)
+
+        const dominantFs = Math.max(...line.map((w) => w.fs))
+        const minGap = Math.max(5, Math.round(dominantFs * 0.28))
+        const maxBase = Math.max(...line.map((w) => w.base))
+
+        // Enforce horizontal gap between consecutive words
+        for (let k = 0; k < line.length; k++) {
+          const curr = line[k]
+          if (k > 0) {
+            const prev = line[k - 1]
+            if (curr.x < prev.x + prev.w + minGap) {
+              curr.x = prev.x + prev.w + minGap
+            }
+          }
+          // Snap baseline across the line so words don't jitter up/down
+          curr.base = maxBase
+          curr.y = maxBase - curr.h * 0.82
+        }
+      }
+
+      // Enforce vertical line leading between consecutive lines in this block
+      for (let l = 1; l < lines.length; l++) {
+        const prevLine = lines[l - 1]
+        const currLine = lines[l]
+        const prevBottom = Math.max(...prevLine.map((w) => w.y + w.h))
+        const fs = Math.max(...currLine.map((w) => w.fs))
+        const minLineTop = prevBottom + Math.max(4, Math.round(fs * 0.35))
+
+        const curTop = Math.min(...currLine.map((w) => w.y))
+        if (curTop < minLineTop) {
+          const shiftY = minLineTop - curTop
+          for (const w of currLine) {
+            w.y += shiftY
+            w.base += shiftY
+          }
+        }
+      }
+    }
+
+    // Inter-block spacing: prevent consecutive paragraphs from stacking on top of each other
+    const sortedBlocks = Array.from(blockMap.values()).filter((list) => list.length > 0)
+    sortedBlocks.sort((a, b) => {
+      const topA = Math.min(...a.map((w) => w.y))
+      const topB = Math.min(...b.map((w) => w.y))
+      return topA - topB
+    })
+
+    for (let b = 1; b < sortedBlocks.length; b++) {
+      const prevBlock = sortedBlocks[b - 1]
+      const currBlock = sortedBlocks[b]
+      const prevBottom = Math.max(...prevBlock.map((w) => w.y + w.h))
+      const prevLeft = Math.min(...prevBlock.map((w) => w.x))
+      const prevRight = Math.max(...prevBlock.map((w) => w.x + w.w))
+
+      const currTop = Math.min(...currBlock.map((w) => w.y))
+      const currLeft = Math.min(...currBlock.map((w) => w.x))
+      const currRight = Math.max(...currBlock.map((w) => w.x + w.w))
+
+      // If the blocks overlap horizontally (stacked in the same column)
+      const horizOverlap = Math.min(prevRight, currRight) - Math.max(prevLeft, currLeft)
+      if (horizOverlap > 40) {
+        const minBlockTop = prevBottom + 14 // 14px clean paragraph margin
+        if (currTop < minBlockTop) {
+          const shiftY = minBlockTop - currTop
+          for (const w of currBlock) {
+            w.y += shiftY
+            w.base += shiftY
+          }
+        }
+      }
+    }
+
+    // Floating Image Protection: wrap words that would overlap images
+    for (const im of images) {
+      const b = im.box
+      const imgLeft = b.x - 16
+      const imgRight = b.x + b.w + 16
+      const imgTop = b.y - 12
+      const imgBottom = b.y + b.h + 16
+
+      for (const g of glyphs) {
+        if (g.y + g.h > imgTop && g.y < imgBottom) {
+          if (g.x + g.w > imgLeft && g.x < imgRight) {
+            if (g.x < imgLeft) {
+              g.y = imgBottom + 8
+              g.base = g.y + g.h * 0.82
+            }
+          }
+        }
+      }
+    }
 
     onProgress('رسم الصفحة…', 0.5)
 
@@ -534,6 +720,45 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
       } else {
         // Interactive platform element: paint onto elements canvas
         paintBox(ctx, b)
+      }
+    }
+
+    // Structured backdrop plates:
+    for (const im of images) {
+      const b = im.box
+      if (b.w >= 24 && b.h >= 24) {
+        bctx.save()
+        bctx.fillStyle = '#f8fafc'
+        bctx.shadowColor = 'rgba(15, 23, 42, 0.08)'
+        bctx.shadowBlur = 18
+        bctx.shadowOffsetY = 6
+        rr(bctx, b.x - 8, b.y - 8, b.w + 16, b.h + 16, [10, 10, 10, 10])
+        bctx.fill()
+        bctx.strokeStyle = '#cbd5e1'
+        bctx.lineWidth = 1.2
+        bctx.stroke()
+        bctx.restore()
+      }
+    }
+
+    if (glyphs.length > 0) {
+      const minX = Math.max(16, Math.min(...glyphs.map((w) => w.x)) - 16)
+      const minY = Math.max(16, Math.min(...glyphs.map((w) => w.y)) - 20)
+      const maxX = Math.min(W - 16, Math.max(...glyphs.map((w) => w.x + w.w)) + 16)
+      const maxY = Math.min(H - 16, Math.max(...glyphs.map((w) => w.y + w.h)) + 24)
+
+      if (maxX > minX + 60 && maxY > minY + 60) {
+        bctx.save()
+        bctx.fillStyle = '#ffffff'
+        bctx.shadowColor = 'rgba(15, 23, 42, 0.04)'
+        bctx.shadowBlur = 20
+        bctx.shadowOffsetY = 8
+        rr(bctx, minX, minY, maxX - minX, maxY - minY, [16, 16, 16, 16])
+        bctx.fill()
+        bctx.strokeStyle = 'rgba(226, 232, 240, 0.85)'
+        bctx.lineWidth = 1.2
+        bctx.stroke()
+        bctx.restore()
       }
     }
 

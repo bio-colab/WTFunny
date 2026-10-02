@@ -131,7 +131,12 @@ const MAX_BYTES = 4_000_000
 
 // Freeze animations, kill scripts, inject base
 function prepareHtml(html: string, baseUrl: string): string {
-  const inject = `<base href="${baseUrl.replace(/"/g, '&quot;')}"><style id="daw-inject">*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}html{scroll-behavior:auto!important}</style>`
+  const inject = `<base href="${baseUrl.replace(/"/g, '&quot;')}"><style id="daw-inject">
+*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}
+html{scroll-behavior:auto!important}
+.mw-jump-link,.navbox,.vector-menu,#mw-navigation,#siteNotice,.noprint,.mw-editsection,.reference,.citation-needed,.reflist,#catlinks,.mw-indicator,.cx-callout{display:none!important}
+body{word-spacing:normal!important;letter-spacing:normal!important}
+</style>`
   let out = html
   // strip scripts & iframes
   out = out.replace(/<script[\s\S]*?<\/script>/gi, '')
