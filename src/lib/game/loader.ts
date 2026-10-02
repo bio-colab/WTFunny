@@ -660,39 +660,49 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
     const lbuf = new Uint32Array(layout.data.buffer)
 
     const colors = new Uint32Array(GW * GH)
-    // sample: dominant color of each 2x2 block (skip transparent)
-    for (let cy = 0; cy < GH; cy++) {
-      for (let cx = 0; cx < GW; cx++) {
-        let best = 0
-        let bestA = 0
-        let r = 0
-        let g = 0
-        let b = 0
-        let n = 0
-        for (let sy = 0; sy < CELL; sy++) {
-          const ly = Math.min(H - 1, cy * CELL + sy)
-          for (let sx = 0; sx < CELL; sx++) {
-            const lx = Math.min(W - 1, cx * CELL + sx)
-            const c = lbuf[ly * W + lx]
-            const a = c >>> 24
-            if (a > bestA) {
-              bestA = a
-              best = c
-            }
-            if (a > 24) {
-              r += c & 255
-              g += (c >>> 8) & 255
-              b += (c >>> 16) & 255
-              n++
+    if (CELL === 1) {
+      // 1:1 Native Resolution: direct transfer preserving original vector element fidelity
+      for (let i = 0; i < GW * GH; i++) {
+        const c = lbuf[i]
+        if ((c >>> 24) > 28) {
+          colors[i] = c
+        }
+      }
+    } else {
+      // sample: dominant color of each 2x2 block (skip transparent)
+      for (let cy = 0; cy < GH; cy++) {
+        for (let cx = 0; cx < GW; cx++) {
+          let best = 0
+          let bestA = 0
+          let r = 0
+          let g = 0
+          let b = 0
+          let n = 0
+          for (let sy = 0; sy < CELL; sy++) {
+            const ly = Math.min(H - 1, cy * CELL + sy)
+            for (let sx = 0; sx < CELL; sx++) {
+              const lx = Math.min(W - 1, cx * CELL + sx)
+              const c = lbuf[ly * W + lx]
+              const a = c >>> 24
+              if (a > bestA) {
+                bestA = a
+                best = c
+              }
+              if (a > 24) {
+                r += c & 255
+                g += (c >>> 8) & 255
+                b += (c >>> 16) & 255
+                n++
+              }
             }
           }
-        }
-        if (n > 0 && bestA > 40) {
-          const rr2 = Math.round(r / n)
-          const gg = Math.round(g / n)
-          const bb = Math.round(b / n)
-          const aa = bestA
-          colors[cy * GW + cx] = (aa << 24) | (bb << 16) | (gg << 8) | rr2
+          if (n > 0 && bestA > 40) {
+            const rr2 = Math.round(r / n)
+            const gg = Math.round(g / n)
+            const bb = Math.round(b / n)
+            const aa = bestA
+            colors[cy * GW + cx] = (aa << 24) | (bb << 16) | (gg << 8) | rr2
+          }
         }
       }
     }
@@ -734,7 +744,7 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
           el.cells.push(i)
         }
       }
-      if (el.cells.length < 3) {
+      if (el.cells.length < (CELL === 1 ? 8 : 3)) {
         for (const i of el.cells) owners[i] = -1
         el.cells.length = 0
       }
@@ -763,8 +773,8 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
       const gx0 = Math.floor(g.x / CELL)
       const gy0 = Math.floor(g.y / CELL)
       const gCol = packColor(g.color)
-      for (let py = 0; py < mh; py += 2) {
-        for (let px = 0; px < mw; px += 2) {
+      for (let py = 0; py < mh; py += CELL) {
+        for (let px = 0; px < mw; px += CELL) {
           if (md[(py * mw + px) * 4 + 3] > 60) {
             const cx = gx0 + Math.floor((px - 1) / CELL)
             const cy = gy0 + Math.floor((py - 1) / CELL)

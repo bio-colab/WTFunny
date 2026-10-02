@@ -3,8 +3,8 @@
 
 import { ConfigManager } from './engineConfig'
 
-export const CELL = 2 // world px per grid cell
-export const SKY_ROWS = 80 // empty rows above the page (160px of sky), like the original
+export const CELL = 1 // 1:1 Native Resolution Pixel Grid (Original Element Quality)
+export const SKY_ROWS = 160 // 160px of sky above the page roof
 
 export const MAT_EMPTY = 0
 export const MAT_SOLID = 1
@@ -275,7 +275,7 @@ export class World {
     this.heat[i] = 0
     this.destroyedCells++
     this.dirty = true
-    if (opts.debris !== false && col !== 0 && Math.random() < 0.5 && this.particles.length < 22000) {
+    if (opts.debris !== false && col !== 0 && Math.random() < 0.22 && this.particles.length < 22000) {
       const c = unpackColor(col)
       this.spawnParticle({
         x: wx,
@@ -308,7 +308,7 @@ export class World {
       return
     }
     // split into up to 3 connected components for big boxes
-    const comps = cells.length > 140 ? splitComponents(cells, this.GW, 3) : [cells]
+    const comps = cells.length > 400 ? splitComponents(cells, this.GW, 3) : [cells]
     let ci = 0
     for (const comp of comps) {
       let minx = 1e9
@@ -746,7 +746,7 @@ export class World {
     const sw = Math.min(this.GW - sx, viewW / CELL)
     const sh = Math.min(this.GH - sy, viewH / CELL)
     if (sw <= 0 || sh <= 0) return
-    ctx.imageSmoothingEnabled = false
+    ctx.imageSmoothingEnabled = true
     ctx.drawImage(this.levelCanvas, sx, sy, sw, sh, sx * CELL - camX, sy * CELL - camY, sw * CELL, sh * CELL)
 
     // chunks

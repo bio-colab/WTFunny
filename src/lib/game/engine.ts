@@ -550,7 +550,8 @@ export class DestroyEngine {
     const world = this.world
     ctx.save()
     ctx.scale(this.dpr, this.dpr)
-    ctx.imageSmoothingEnabled = false
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
 
     const camX = this.camX + this.shakeX
     const camY = this.camY + this.shakeY
