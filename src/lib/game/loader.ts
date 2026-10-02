@@ -31,6 +31,7 @@ type DrawBox = {
   bg: string | null
   grad: { type: 'linear'; angle: number; stops: { c: string; p: number }[] } | null
   border: { w: number; c: string } | null
+  shadow?: { color: string; x: number; y: number; blur: number } | null
   image: HTMLImageElement | null
   imgFit: string
   opacity: number
@@ -139,6 +140,24 @@ function radiusOf(s: CSSStyleDeclaration): [number, number, number, number] {
   const br = raw(s.borderBottomRightRadius)
   const bl = raw(s.borderBottomLeftRadius)
   return [tl, tr, br, bl]
+}
+
+function parseBoxShadow(s: string | null | undefined): { color: string; x: number; y: number; blur: number } | null {
+  if (!s || s === 'none' || s.trim() === '') return null
+  // Match standard computed styles: "rgb(15, 23, 42) 0px 8px 20px -8px" or "rgba(0, 0, 0, 0.1) 0px 10px 15px -3px"
+  const m1 = s.match(/(rgba?\([^)]+\))\s+(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px/)
+  if (m1) {
+    const blur = parseFloat(m1[4]) || 0
+    if (blur > 0.5) {
+      return {
+        color: m1[1],
+        x: parseFloat(m1[2]) || 0,
+        y: parseFloat(m1[3]) || 0,
+        blur: Math.min(24, blur),
+      }
+    }
+  }
+  return null
 }
 
 const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'head', 'meta', 'link', 'title', 'iframe', 'br', 'source', 'track', 'param', 'object', 'embed'])
@@ -262,13 +281,14 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
 
       const isImg = tag === 'img'
       const inlineSvg = tag === 'svg'
+      const shadow = parseBoxShadow(cs.boxShadow)
       const hasBg =
         parseColor(cs.backgroundColor) !== null ||
         /gradient\(/i.test(cs.backgroundImage || '') ||
         isImg ||
         inlineSvg
 
-      const visibleBox = (hasBg || parseColor(cs.borderTopColor)) && w >= 3 && h >= 3 && boxCount < MAX_BOXES
+      const visibleBox = (hasBg || parseColor(cs.borderTopColor) || shadow) && w >= 3 && h >= 3 && boxCount < MAX_BOXES
 
       let box: DrawBox | null = null
       if (visibleBox) {
@@ -309,6 +329,7 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
             bg: bg ?? (tag === 'img' ? '#c8c8c8' : '#9aa4b0'),
             grad,
             border: null,
+            shadow,
             image: null,
             imgFit,
             opacity: op,
@@ -332,6 +353,7 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
             bg,
             grad,
             border: null,
+            shadow,
             image: null,
             imgFit,
             opacity: op,
@@ -347,14 +369,16 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
         }
       }
 
-      // ---- text ----
+      // ---- text: direct child text nodes only to eliminate duplication across ancestor walk calls ----
       if (glyphCount < MAX_GLYPHS) {
-        const walker = idoc.createTreeWalker(node, NodeFilter.SHOW_TEXT)
-        let tn: Text | null = walker.nextNode() as Text | null
-        while (tn && glyphCount < MAX_GLYPHS) {
+        const childNodes = Array.from(node.childNodes)
+        for (let cIdx = 0; cIdx < childNodes.length && glyphCount < MAX_GLYPHS; cIdx++) {
+          const childNode = childNodes[cIdx]
+          if (childNode.nodeType !== Node.TEXT_NODE) continue
+          const tn = childNode as Text
           const txt = tn.data
           if (txt.trim().length > 0) {
-            const pcs = win.getComputedStyle(tn.parentElement ?? node)
+            const pcs = win.getComputedStyle(node)
             const fs = parseFloat(pcs.fontSize) || 16
             if (fs >= 7) {
               const fill = parseColor(pcs.webkitTextFillColor) ?? parseColor(pcs.color) ?? '#111111'
@@ -446,7 +470,6 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
               }
             }
           }
-          tn = walker.nextNode() as Text | null
         }
       }
 
@@ -484,6 +507,12 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
     const paintBox = (c: CanvasRenderingContext2D, b: DrawBox) => {
       c.save()
       c.globalAlpha = b.opacity
+      if (b.shadow) {
+        c.shadowColor = b.shadow.color
+        c.shadowBlur = b.shadow.blur
+        c.shadowOffsetX = b.shadow.x
+        c.shadowOffsetY = b.shadow.y
+      }
       rr(c, b.x, b.y, b.w, b.h, b.radius)
       if (b.grad) {
         const rad = (b.grad.angle * Math.PI) / 180
@@ -502,6 +531,7 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
       }
       c.fill()
       if (b.border) {
+        if (b.shadow) c.shadowColor = 'transparent'
         c.strokeStyle = b.border.c
         c.lineWidth = b.border.w * 2
         rr(c, b.x + b.border.w / 2, b.y + b.border.w / 2, b.w - b.border.w, b.h - b.border.w, b.radius)
@@ -512,11 +542,25 @@ export async function buildLevel(html: string, baseUrl: string, layoutW: number,
 
     for (const b of boxes) {
       if (!b.el) {
-        // Scenery container: paint onto backdrop sheet (open air inside)
+        // Scenery container: paint onto backdrop sheet (with shadows)
         paintBox(bctx, b)
       } else {
-        // Interactive platform element: paint onto elements canvas
-        paintBox(ctx, b)
+        // Interactive platform element:
+        // Draw soft shadow on backdrop canvas so elements pop visually
+        if (b.shadow) {
+          bctx.save()
+          bctx.globalAlpha = b.opacity * 0.55
+          bctx.shadowColor = b.shadow.color
+          bctx.shadowBlur = b.shadow.blur
+          bctx.shadowOffsetX = b.shadow.x
+          bctx.shadowOffsetY = b.shadow.y
+          rr(bctx, b.x, b.y, b.w, b.h, b.radius)
+          bctx.fillStyle = b.shadow.color
+          bctx.fill()
+          bctx.restore()
+        }
+        // Paint crisp solid element onto cv (without shadow blur so voxels remain sharp)
+        paintBox(ctx, { ...b, shadow: null })
       }
     }
 

@@ -64,6 +64,33 @@
 
 ---
 
+## 🏛️ المعمارية الهندسية للمحرك (Engine Architecture)
+
+اللعبة **لا تعتمد على مجرد التقاط صورة (Screenshot) للموقع**، بل تعتمد على معمارية هجينة فريدة تستخدم متصفح الويب كـ **"مرجع تخطيطي لتنسيقات CSS" (Browser-assisted Layout Oracle)** ثم تحويلها إلى شبكة فوكسل فيزيائية عبر المراحل التالية:
+
+```text
+[Target URL]
+      ↓
+[Next.js Server Fetch] (جلب كود الـ HTML وتأمينه وتمرير الصور عبر Proxy لمنع CORS Tainting)
+      ↓
+[Sandboxed Iframe] (المتصفح ينفذ الـ Layout المعقد: Flexbox, Grid, Arabic Shaping, RTL, Fonts)
+      ↓
+[DOM Geometry & Text Ranges] (استخراج الإحداثيات والظلال الدقيقة عبر getBoundingClientRect و Range API)
+      ↓
+[Multi-Layer Canvas Rasterizer]:
+  ├── Backdrop Canvas (bctx): رسم الخلفيات، الإطارات، وظلال الصناديق (Box Shadows)
+  └── Elements Canvas (ctx): رسم الكتل القابلة للتدمير (الكلمات العربية، الحروف، الأزرار، الصور)
+      ↓
+[2×2 Voxel Sampling Grid] (تحويل الكانفاس إلى شبكة خلايا نقطية وتخزين Color + Unique Owner ID)
+      ↓
+[Real-time Physics World] (تفاعل اللاعب، الحفر البولياني، تساقط الحطام، وانهيار الهياكل)
+```
+
+> 💡 **ملاحظة حول المواقع المبنية بـ SPAs الحديثة:**  
+> نظراً لأن الأمان يتطلب إيقاف تشغيل وسوم `<script>` غير الموثوقة داخل المتصفح، فإن المواقع التي تعتمد كلياً على الـ Client-Side Rendering (مثل صفحات React/Vue الفارغة التي تُبنى فقط عبر JS) تحتاج إلى مرحلة تسييل مسبقة (Headless Browser Pre-rendering)، وهو أحد المحاور الأساسية في خطة التطوير القادمة.
+
+---
+
 ## 🎮 التحكم وأزرار اللعب (Controls)
 
 | الزر / المفتاح | الوظيفة |
