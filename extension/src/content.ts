@@ -651,6 +651,7 @@ async function launchJahdar() {
     // 1. Extract Live Document Level
     onProgress('قراءة خريطة الموقع الحي…', 0.1)
     const level = await extractLiveDocumentLevel(document, window, onProgress)
+    sitePill.textContent = `${window.location.hostname} • ${level.bodies.length} عنصر صلب`
 
     // 2. Initialize Engine
     const engine = new DestroyEngine({
@@ -658,7 +659,7 @@ async function launchJahdar() {
       onStats: (stats: GameStats) => {
         pctVal.textContent = `${Math.round(stats.pct)}% دمار`
         progressFill.style.width = `${Math.min(100, Math.round(stats.pct))}%`
-        meterCounts.textContent = `${stats.blocks} صلب | ${stats.letters} حرف | ${stats.explosions} انفجار`
+        meterCounts.textContent = `💥 ${stats.blocks} صلب مدمّر | 🔤 ${stats.letters} حرف مسحوق | 💣 ${stats.explosions} تفجير`
         fpsBadge.textContent = `${Math.round(stats.fps)} FPS`
         updateActiveWeapon(stats.weapon)
       },

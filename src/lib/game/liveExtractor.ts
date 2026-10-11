@@ -264,8 +264,10 @@ export async function extractLiveDocumentLevel(
     const href = anchor ? anchor.getAttribute('href') : null
     const shadow = parseBoxShadow(cs.boxShadow)
 
-    const hasBg = parseColor(cs.backgroundColor) !== null || /gradient\(/i.test(cs.backgroundImage || '') || isImg || inlineSvg
-    const visibleBox = (hasBg || parseColor(cs.borderTopColor)) && w >= 4 && h >= 4 && boxCount < MAX_BOXES
+    const bwid = parseFloat(cs.borderLeftWidth) || 0
+    const hasBorder = bwid > 0 && parseColor(cs.borderLeftColor) !== null
+    const hasVisibleBackground = parseColor(cs.backgroundColor) !== null || /gradient\(/i.test(cs.backgroundImage || '')
+    const visibleBox = (hasVisibleBackground || hasBorder || isImg || inlineSvg) && w >= 4 && h >= 4 && boxCount < MAX_BOXES
 
     if (visibleBox) {
       let bg = parseColor(cs.backgroundColor)
@@ -275,14 +277,28 @@ export async function extractLiveDocumentLevel(
 
       if (isImg) {
         image = node as HTMLImageElement
+      } else if (inlineSvg && w >= 6 && h >= 6) {
+        try {
+          const clone = node.cloneNode(true) as SVGElement
+          if (!clone.getAttribute('xmlns')) {
+            clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+          }
+          clone.setAttribute('width', `${Math.round(w)}`)
+          clone.setAttribute('height', `${Math.round(h)}`)
+          const xml = new XMLSerializer().serializeToString(clone)
+          const svgImg = new Image()
+          svgImg.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml)
+          image = svgImg
+        } catch {
+          /* ignore fallback */
+        }
       }
 
-      const isScenery = (w >= W - 12 && h >= H - 12) || (w >= W * 0.72 && h >= 160) || (w >= W * 0.5 && h >= 280)
-      const bwid = parseFloat(cs.borderLeftWidth) || 0
+      const isScenery = (w >= W - 12 && h >= H - 12) || (w >= W * 0.85 && h >= 220)
       let border: { w: number; c: string } | null = null
-      if (bwid > 0) {
+      if (hasBorder) {
         const bc = parseColor(cs.borderLeftColor)
-        if (bc) border = { w: Math.min(14, bwid), c: bc }
+        if (bc) border = { w: Math.min(10, bwid), c: bc }
       }
 
       boxes.push({
@@ -379,218 +395,25 @@ export async function extractLiveDocumentLevel(
 
   for (const child of Array.from(body.children)) walk(child, 0)
 
-  onProgress?.('محاذاة خريطة المكونات…', 0.55)
-
-  // ---- COMPONENT MAP LAYOUT NORMALIZATION ----
-  const blockMap = new Map<number, LiveGlyph[]>()
-  for (const g of glyphs) {
-    let list = blockMap.get(g.blockId)
-    if (!list) {
-      list = []
-      blockMap.set(g.blockId, list)
-    }
-    list.push(g)
-  }
-
-  for (const [, words] of blockMap) {
-    if (words.length === 0) continue
-    words.sort((a, b) => a.y - b.y)
-
-    const lines: LiveGlyph[][] = []
-    let curLine: LiveGlyph[] = []
-    let curY = -1e9
-    let curH = 16
-
-    for (const w of words) {
-      if (curLine.length === 0) {
-        curLine.push(w)
-        curY = w.y
-        curH = w.h
-      } else {
-        if (Math.abs(w.y - curY) <= curH * 0.48) {
-          curLine.push(w)
-          curY = Math.min(curY, w.y)
-        } else {
-          lines.push(curLine)
-          curLine = [w]
-          curY = w.y
-          curH = w.h
-        }
-      }
-    }
-    if (curLine.length > 0) lines.push(curLine)
-
-    for (const line of lines) {
-      line.sort((a, b) => a.x - b.x)
-      const dominantFs = Math.max(...line.map((w) => w.fs))
-      const minGap = Math.max(5, Math.round(dominantFs * 0.28))
-      const maxBase = Math.max(...line.map((w) => w.base))
-
-      for (let k = 0; k < line.length; k++) {
-        const curr = line[k]
-        if (k > 0) {
-          const prev = line[k - 1]
-          if (curr.x < prev.x + prev.w + minGap) {
-            curr.x = prev.x + prev.w + minGap
-          }
-        }
-        curr.base = maxBase
-        curr.y = maxBase - curr.h * 0.82
-      }
-    }
-
-    for (let l = 1; l < lines.length; l++) {
-      const prevLine = lines[l - 1]
-      const currLine = lines[l]
-      const prevBottom = Math.max(...prevLine.map((w) => w.y + w.h))
-      const fs = Math.max(...currLine.map((w) => w.fs))
-      const minLineTop = prevBottom + Math.max(4, Math.round(fs * 0.35))
-      const curTop = Math.min(...currLine.map((w) => w.y))
-      if (curTop < minLineTop) {
-        const shiftY = minLineTop - curTop
-        for (const w of currLine) {
-          w.y += shiftY
-          w.base += shiftY
-        }
-      }
-    }
-  }
-
-  // Inter-block vertical flow alignment
-  const sortedBlocks = Array.from(blockMap.values()).filter((list) => list.length > 0)
-  sortedBlocks.sort((a, b) => Math.min(...a.map((w) => w.y)) - Math.min(...b.map((w) => w.y)))
-
-  for (let b = 1; b < sortedBlocks.length; b++) {
-    const prevBlock = sortedBlocks[b - 1]
-    const currBlock = sortedBlocks[b]
-    const prevBottom = Math.max(...prevBlock.map((w) => w.y + w.h))
-    const prevLeft = Math.min(...prevBlock.map((w) => w.x))
-    const prevRight = Math.max(...prevBlock.map((w) => w.x + w.w))
-    const currTop = Math.min(...currBlock.map((w) => w.y))
-    const currLeft = Math.min(...currBlock.map((w) => w.x))
-    const currRight = Math.max(...currBlock.map((w) => w.x + w.w))
-
-    const horizOverlap = Math.min(prevRight, currRight) - Math.max(prevLeft, currLeft)
-    if (horizOverlap > 40) {
-      const minBlockTop = prevBottom + 14
-      if (currTop < minBlockTop) {
-        const shiftY = minBlockTop - currTop
-        for (const w of currBlock) {
-          w.y += shiftY
-          w.base += shiftY
-        }
-      }
-    }
-  }
-
-  // Floating Image Boundaries
-  for (const b of boxes) {
-    if (!b.image) continue
-    const imgLeft = b.x - 16
-    const imgRight = b.x + b.w + 16
-    const imgTop = b.y - 12
-    const imgBottom = b.y + b.h + 16
-
-    for (const g of glyphs) {
-      if (g.y + g.h > imgTop && g.y < imgBottom) {
-        if (g.x + g.w > imgLeft && g.x < imgRight) {
-          if (g.x < imgLeft) {
-            g.y = imgBottom + 8
-            g.base = g.y + g.h * 0.82
-          }
-        }
-      }
-    }
-  }
-
   onProgress?.('بناء كائنات جحدر الصلبة…', 0.85)
 
-  // Backdrop Cards
+  // Backdrop Scenery
   for (const b of boxes) {
-    if (b.isScenery) {
+    if (b.isScenery && b.bg) {
       bctx.save()
       bctx.globalAlpha = b.opacity
       rr(bctx, b.x, b.y, b.w, b.h, b.radius)
-      if (b.bg) {
-        bctx.fillStyle = b.bg
-        bctx.fill()
-      }
-      bctx.restore()
-    } else if (b.image && b.w >= 24 && b.h >= 24) {
-      bctx.save()
-      bctx.fillStyle = '#f8fafc'
-      bctx.shadowColor = 'rgba(15, 23, 42, 0.08)'
-      bctx.shadowBlur = 18
-      bctx.shadowOffsetY = 6
-      rr(bctx, b.x - 8, b.y - 8, b.w + 16, b.h + 16, [10, 10, 10, 10])
+      bctx.fillStyle = b.bg
       bctx.fill()
-      bctx.strokeStyle = '#cbd5e1'
-      bctx.lineWidth = 1.2
-      bctx.stroke()
       bctx.restore()
     }
   }
 
-  if (glyphs.length > 0) {
-    const minX = Math.max(16, Math.min(...glyphs.map((w) => w.x)) - 16)
-    const minY = Math.max(16, Math.min(...glyphs.map((w) => w.y)) - 20)
-    const maxX = Math.min(W - 16, Math.max(...glyphs.map((w) => w.x + w.w)) + 16)
-    const maxY = Math.min(H - 16, Math.max(...glyphs.map((w) => w.y + w.h)) + 24)
-
-    if (maxX > minX + 60 && maxY > minY + 60) {
-      bctx.save()
-      bctx.fillStyle = '#ffffff'
-      bctx.shadowColor = 'rgba(15, 23, 42, 0.04)'
-      bctx.shadowBlur = 20
-      bctx.shadowOffsetY = 8
-      rr(bctx, minX, minY, maxX - minX, maxY - minY, [16, 16, 16, 16])
-      bctx.fill()
-      bctx.strokeStyle = 'rgba(226, 232, 240, 0.85)'
-      bctx.lineWidth = 1.2
-      bctx.stroke()
-      bctx.restore()
-    }
-  }
-
-  // Assemble Solid Bodies
+  // Assemble Solid Bodies:
+  // CRITICAL: Boxes first (containers/cards), so they render behind words!
   const bodies: SolidBody[] = []
   const elements = new Map<number, LevelElement>()
   let bodyId = 0
-
-  for (const g of glyphs) {
-    const mass = Math.max(8, Math.round(g.w * g.h * 0.07))
-    const hp = Math.max(15, Math.round(15 + g.w * 0.35))
-    const b: SolidBody = {
-      id: bodyId++,
-      kind: 'word',
-      x: g.x,
-      y: g.y,
-      w: g.w,
-      h: g.h,
-      baseY: g.base,
-      vx: 0,
-      vy: 0,
-      rot: 0,
-      vrot: 0,
-      mass,
-      hp,
-      maxHp: hp,
-      anchored: true,
-      settled: false,
-      settleT: 0,
-      destroyed: false,
-      burning: 0,
-      text: g.ch,
-      font: g.font,
-      color: g.color,
-      underline: g.underline,
-      tag: g.tag,
-      semanticRole: g.semanticRole,
-      href: g.href,
-      damageDecals: [],
-    }
-    bodies.push(b)
-  }
 
   for (const bx of boxes) {
     if (bx.isScenery) continue
@@ -626,6 +449,42 @@ export async function extractLiveDocumentLevel(
       tag: bx.tag,
       semanticRole: bx.semanticRole,
       href: bx.href,
+      damageDecals: [],
+    }
+    bodies.push(b)
+  }
+
+  // Glyphs and Words SECOND, so they render on top of boxes!
+  for (const g of glyphs) {
+    const mass = Math.max(8, Math.round(g.w * g.h * 0.07))
+    const hp = Math.max(15, Math.round(15 + g.w * 0.35))
+    const b: SolidBody = {
+      id: bodyId++,
+      kind: 'word',
+      x: g.x,
+      y: g.y,
+      w: g.w,
+      h: g.h,
+      baseY: g.base,
+      vx: 0,
+      vy: 0,
+      rot: 0,
+      vrot: 0,
+      mass,
+      hp,
+      maxHp: hp,
+      anchored: true,
+      settled: false,
+      settleT: 0,
+      destroyed: false,
+      burning: 0,
+      text: g.ch,
+      font: g.font,
+      color: g.color,
+      underline: g.underline,
+      tag: g.tag,
+      semanticRole: g.semanticRole,
+      href: g.href,
       damageDecals: [],
     }
     bodies.push(b)

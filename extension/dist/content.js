@@ -1015,11 +1015,10 @@
           ctx.save();
           ctx.font = b.font || "16px sans-serif";
           ctx.fillStyle = b.color || "#ffffff";
-          ctx.textBaseline = "alphabetic";
-          const base = b.baseY !== void 0 ? b.baseY - camY : scrY + b.h * 0.8;
-          ctx.fillText(b.text || "", scrX, base);
+          ctx.textBaseline = "top";
+          ctx.fillText(b.text || "", scrX, scrY);
           if (b.underline) {
-            ctx.fillRect(scrX, base + 2, b.w, 1.5);
+            ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.5);
           }
           if (b.damageDecals.length > 0) {
             ctx.fillStyle = "rgba(25, 25, 25, 0.8)";
@@ -1070,9 +1069,8 @@
           ctx.save();
           ctx.font = b.font || "16px sans-serif";
           ctx.fillStyle = b.color || "#ffffff";
-          ctx.textBaseline = "alphabetic";
-          const base = b.baseY !== void 0 ? b.baseY - camY : scrY + b.h * 0.8;
-          ctx.fillText(b.text || "", scrX, base);
+          ctx.textBaseline = "top";
+          ctx.fillText(b.text || "", scrX, scrY);
           ctx.restore();
         } else if (b.kind === "box") {
           drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, null);
@@ -5530,8 +5528,10 @@
       const anchor = node.closest("a");
       const href = anchor ? anchor.getAttribute("href") : null;
       const shadow = parseBoxShadow2(cs.boxShadow);
-      const hasBg = parseColor2(cs.backgroundColor) !== null || /gradient\(/i.test(cs.backgroundImage || "") || isImg || inlineSvg;
-      const visibleBox = (hasBg || parseColor2(cs.borderTopColor)) && w >= 4 && h >= 4 && boxCount < MAX_BOXES2;
+      const bwid = parseFloat(cs.borderLeftWidth) || 0;
+      const hasBorder = bwid > 0 && parseColor2(cs.borderLeftColor) !== null;
+      const hasVisibleBackground = parseColor2(cs.backgroundColor) !== null || /gradient\(/i.test(cs.backgroundImage || "");
+      const visibleBox = (hasVisibleBackground || hasBorder || isImg || inlineSvg) && w >= 4 && h >= 4 && boxCount < MAX_BOXES2;
       if (visibleBox) {
         let bg = parseColor2(cs.backgroundColor);
         let grad = /gradient\(/i.test(cs.backgroundImage || "") ? parseGradient2(cs.backgroundImage) : null;
@@ -5539,13 +5539,26 @@
         let imgFit = cs.objectFit || "cover";
         if (isImg) {
           image = node;
+        } else if (inlineSvg && w >= 6 && h >= 6) {
+          try {
+            const clone = node.cloneNode(true);
+            if (!clone.getAttribute("xmlns")) {
+              clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+            }
+            clone.setAttribute("width", `${Math.round(w)}`);
+            clone.setAttribute("height", `${Math.round(h)}`);
+            const xml = new XMLSerializer().serializeToString(clone);
+            const svgImg = new Image();
+            svgImg.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
+            image = svgImg;
+          } catch {
+          }
         }
-        const isScenery = w >= W2 - 12 && h >= H - 12 || w >= W2 * 0.72 && h >= 160 || w >= W2 * 0.5 && h >= 280;
-        const bwid = parseFloat(cs.borderLeftWidth) || 0;
+        const isScenery = w >= W2 - 12 && h >= H - 12 || w >= W2 * 0.85 && h >= 220;
         let border = null;
-        if (bwid > 0) {
+        if (hasBorder) {
           const bc = parseColor2(cs.borderLeftColor);
-          if (bc) border = { w: Math.min(14, bwid), c: bc };
+          if (bc) border = { w: Math.min(10, bwid), c: bc };
         }
         boxes.push({
           x,
@@ -5632,195 +5645,20 @@
       }
     };
     for (const child of Array.from(body.children)) walk(child, 0);
-    onProgress?.("\u0645\u062D\u0627\u0630\u0627\u0629 \u062E\u0631\u064A\u0637\u0629 \u0627\u0644\u0645\u0643\u0648\u0646\u0627\u062A\u2026", 0.55);
-    const blockMap = /* @__PURE__ */ new Map();
-    for (const g of glyphs) {
-      let list = blockMap.get(g.blockId);
-      if (!list) {
-        list = [];
-        blockMap.set(g.blockId, list);
-      }
-      list.push(g);
-    }
-    for (const [, words] of blockMap) {
-      if (words.length === 0) continue;
-      words.sort((a, b) => a.y - b.y);
-      const lines = [];
-      let curLine = [];
-      let curY = -1e9;
-      let curH = 16;
-      for (const w of words) {
-        if (curLine.length === 0) {
-          curLine.push(w);
-          curY = w.y;
-          curH = w.h;
-        } else {
-          if (Math.abs(w.y - curY) <= curH * 0.48) {
-            curLine.push(w);
-            curY = Math.min(curY, w.y);
-          } else {
-            lines.push(curLine);
-            curLine = [w];
-            curY = w.y;
-            curH = w.h;
-          }
-        }
-      }
-      if (curLine.length > 0) lines.push(curLine);
-      for (const line of lines) {
-        line.sort((a, b) => a.x - b.x);
-        const dominantFs = Math.max(...line.map((w) => w.fs));
-        const minGap = Math.max(5, Math.round(dominantFs * 0.28));
-        const maxBase = Math.max(...line.map((w) => w.base));
-        for (let k = 0; k < line.length; k++) {
-          const curr = line[k];
-          if (k > 0) {
-            const prev = line[k - 1];
-            if (curr.x < prev.x + prev.w + minGap) {
-              curr.x = prev.x + prev.w + minGap;
-            }
-          }
-          curr.base = maxBase;
-          curr.y = maxBase - curr.h * 0.82;
-        }
-      }
-      for (let l = 1; l < lines.length; l++) {
-        const prevLine = lines[l - 1];
-        const currLine = lines[l];
-        const prevBottom = Math.max(...prevLine.map((w) => w.y + w.h));
-        const fs = Math.max(...currLine.map((w) => w.fs));
-        const minLineTop = prevBottom + Math.max(4, Math.round(fs * 0.35));
-        const curTop = Math.min(...currLine.map((w) => w.y));
-        if (curTop < minLineTop) {
-          const shiftY = minLineTop - curTop;
-          for (const w of currLine) {
-            w.y += shiftY;
-            w.base += shiftY;
-          }
-        }
-      }
-    }
-    const sortedBlocks = Array.from(blockMap.values()).filter((list) => list.length > 0);
-    sortedBlocks.sort((a, b) => Math.min(...a.map((w) => w.y)) - Math.min(...b.map((w) => w.y)));
-    for (let b = 1; b < sortedBlocks.length; b++) {
-      const prevBlock = sortedBlocks[b - 1];
-      const currBlock = sortedBlocks[b];
-      const prevBottom = Math.max(...prevBlock.map((w) => w.y + w.h));
-      const prevLeft = Math.min(...prevBlock.map((w) => w.x));
-      const prevRight = Math.max(...prevBlock.map((w) => w.x + w.w));
-      const currTop = Math.min(...currBlock.map((w) => w.y));
-      const currLeft = Math.min(...currBlock.map((w) => w.x));
-      const currRight = Math.max(...currBlock.map((w) => w.x + w.w));
-      const horizOverlap = Math.min(prevRight, currRight) - Math.max(prevLeft, currLeft);
-      if (horizOverlap > 40) {
-        const minBlockTop = prevBottom + 14;
-        if (currTop < minBlockTop) {
-          const shiftY = minBlockTop - currTop;
-          for (const w of currBlock) {
-            w.y += shiftY;
-            w.base += shiftY;
-          }
-        }
-      }
-    }
-    for (const b of boxes) {
-      if (!b.image) continue;
-      const imgLeft = b.x - 16;
-      const imgRight = b.x + b.w + 16;
-      const imgTop = b.y - 12;
-      const imgBottom = b.y + b.h + 16;
-      for (const g of glyphs) {
-        if (g.y + g.h > imgTop && g.y < imgBottom) {
-          if (g.x + g.w > imgLeft && g.x < imgRight) {
-            if (g.x < imgLeft) {
-              g.y = imgBottom + 8;
-              g.base = g.y + g.h * 0.82;
-            }
-          }
-        }
-      }
-    }
     onProgress?.("\u0628\u0646\u0627\u0621 \u0643\u0627\u0626\u0646\u0627\u062A \u062C\u062D\u062F\u0631 \u0627\u0644\u0635\u0644\u0628\u0629\u2026", 0.85);
     for (const b of boxes) {
-      if (b.isScenery) {
+      if (b.isScenery && b.bg) {
         bctx.save();
         bctx.globalAlpha = b.opacity;
         rr(bctx, b.x, b.y, b.w, b.h, b.radius);
-        if (b.bg) {
-          bctx.fillStyle = b.bg;
-          bctx.fill();
-        }
-        bctx.restore();
-      } else if (b.image && b.w >= 24 && b.h >= 24) {
-        bctx.save();
-        bctx.fillStyle = "#f8fafc";
-        bctx.shadowColor = "rgba(15, 23, 42, 0.08)";
-        bctx.shadowBlur = 18;
-        bctx.shadowOffsetY = 6;
-        rr(bctx, b.x - 8, b.y - 8, b.w + 16, b.h + 16, [10, 10, 10, 10]);
+        bctx.fillStyle = b.bg;
         bctx.fill();
-        bctx.strokeStyle = "#cbd5e1";
-        bctx.lineWidth = 1.2;
-        bctx.stroke();
-        bctx.restore();
-      }
-    }
-    if (glyphs.length > 0) {
-      const minX = Math.max(16, Math.min(...glyphs.map((w) => w.x)) - 16);
-      const minY = Math.max(16, Math.min(...glyphs.map((w) => w.y)) - 20);
-      const maxX = Math.min(W2 - 16, Math.max(...glyphs.map((w) => w.x + w.w)) + 16);
-      const maxY = Math.min(H - 16, Math.max(...glyphs.map((w) => w.y + w.h)) + 24);
-      if (maxX > minX + 60 && maxY > minY + 60) {
-        bctx.save();
-        bctx.fillStyle = "#ffffff";
-        bctx.shadowColor = "rgba(15, 23, 42, 0.04)";
-        bctx.shadowBlur = 20;
-        bctx.shadowOffsetY = 8;
-        rr(bctx, minX, minY, maxX - minX, maxY - minY, [16, 16, 16, 16]);
-        bctx.fill();
-        bctx.strokeStyle = "rgba(226, 232, 240, 0.85)";
-        bctx.lineWidth = 1.2;
-        bctx.stroke();
         bctx.restore();
       }
     }
     const bodies = [];
     const elements = /* @__PURE__ */ new Map();
     let bodyId = 0;
-    for (const g of glyphs) {
-      const mass = Math.max(8, Math.round(g.w * g.h * 0.07));
-      const hp = Math.max(15, Math.round(15 + g.w * 0.35));
-      const b = {
-        id: bodyId++,
-        kind: "word",
-        x: g.x,
-        y: g.y,
-        w: g.w,
-        h: g.h,
-        baseY: g.base,
-        vx: 0,
-        vy: 0,
-        rot: 0,
-        vrot: 0,
-        mass,
-        hp,
-        maxHp: hp,
-        anchored: true,
-        settled: false,
-        settleT: 0,
-        destroyed: false,
-        burning: 0,
-        text: g.ch,
-        font: g.font,
-        color: g.color,
-        underline: g.underline,
-        tag: g.tag,
-        semanticRole: g.semanticRole,
-        href: g.href,
-        damageDecals: []
-      };
-      bodies.push(b);
-    }
     for (const bx of boxes) {
       if (bx.isScenery) continue;
       const isImg = bx.image !== null;
@@ -5855,6 +5693,40 @@
         tag: bx.tag,
         semanticRole: bx.semanticRole,
         href: bx.href,
+        damageDecals: []
+      };
+      bodies.push(b);
+    }
+    for (const g of glyphs) {
+      const mass = Math.max(8, Math.round(g.w * g.h * 0.07));
+      const hp = Math.max(15, Math.round(15 + g.w * 0.35));
+      const b = {
+        id: bodyId++,
+        kind: "word",
+        x: g.x,
+        y: g.y,
+        w: g.w,
+        h: g.h,
+        baseY: g.base,
+        vx: 0,
+        vy: 0,
+        rot: 0,
+        vrot: 0,
+        mass,
+        hp,
+        maxHp: hp,
+        anchored: true,
+        settled: false,
+        settleT: 0,
+        destroyed: false,
+        burning: 0,
+        text: g.ch,
+        font: g.font,
+        color: g.color,
+        underline: g.underline,
+        tag: g.tag,
+        semanticRole: g.semanticRole,
+        href: g.href,
         damageDecals: []
       };
       bodies.push(b);
@@ -6475,12 +6347,13 @@
     try {
       onProgress("\u0642\u0631\u0627\u0621\u0629 \u062E\u0631\u064A\u0637\u0629 \u0627\u0644\u0645\u0648\u0642\u0639 \u0627\u0644\u062D\u064A\u2026", 0.1);
       const level = await extractLiveDocumentLevel(document, window, onProgress);
+      sitePill.textContent = `${window.location.hostname} \u2022 ${level.bodies.length} \u0639\u0646\u0635\u0631 \u0635\u0644\u0628`;
       const engine = new DestroyEngine({
         onProgress,
         onStats: (stats) => {
           pctVal.textContent = `${Math.round(stats.pct)}% \u062F\u0645\u0627\u0631`;
           progressFill.style.width = `${Math.min(100, Math.round(stats.pct))}%`;
-          meterCounts.textContent = `${stats.blocks} \u0635\u0644\u0628 | ${stats.letters} \u062D\u0631\u0641 | ${stats.explosions} \u0627\u0646\u0641\u062C\u0627\u0631`;
+          meterCounts.textContent = `\u{1F4A5} ${stats.blocks} \u0635\u0644\u0628 \u0645\u062F\u0645\u0651\u0631 | \u{1F524} ${stats.letters} \u062D\u0631\u0641 \u0645\u0633\u062D\u0648\u0642 | \u{1F4A3} ${stats.explosions} \u062A\u0641\u062C\u064A\u0631`;
           fpsBadge.textContent = `${Math.round(stats.fps)} FPS`;
           updateActiveWeapon(stats.weapon);
         },

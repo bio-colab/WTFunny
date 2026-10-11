@@ -970,11 +970,10 @@ export class World {
         ctx.save()
         ctx.font = b.font || '16px sans-serif'
         ctx.fillStyle = b.color || '#ffffff'
-        ctx.textBaseline = 'alphabetic'
-        const base = b.baseY !== undefined ? b.baseY - camY : scrY + b.h * 0.8
-        ctx.fillText(b.text || '', scrX, base)
+        ctx.textBaseline = 'top'
+        ctx.fillText(b.text || '', scrX, scrY)
         if (b.underline) {
-          ctx.fillRect(scrX, base + 2, b.w, 1.5)
+          ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.5)
         }
         // Draw bullet hole / damage decals
         if (b.damageDecals.length > 0) {
@@ -1031,9 +1030,8 @@ export class World {
         ctx.save()
         ctx.font = b.font || '16px sans-serif'
         ctx.fillStyle = b.color || '#ffffff'
-        ctx.textBaseline = 'alphabetic'
-        const base = b.baseY !== undefined ? b.baseY - camY : scrY + b.h * 0.8
-        ctx.fillText(b.text || '', scrX, base)
+        ctx.textBaseline = 'top'
+        ctx.fillText(b.text || '', scrX, scrY)
         ctx.restore()
       } else if (b.kind === 'box') {
         drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, null)
