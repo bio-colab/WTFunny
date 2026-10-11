@@ -5653,6 +5653,72 @@
       }
     };
     for (const child of Array.from(body.children)) walk(child, 0);
+    const blockMap = /* @__PURE__ */ new Map();
+    for (const g of glyphs) {
+      let list = blockMap.get(g.blockId);
+      if (!list) {
+        list = [];
+        blockMap.set(g.blockId, list);
+      }
+      list.push(g);
+    }
+    for (const [, words] of blockMap) {
+      if (words.length <= 1) continue;
+      words.sort((a, b) => a.y - b.y);
+      const lines = [];
+      let curLine = [];
+      let curY = -1e9;
+      let curH = 16;
+      for (const w of words) {
+        if (curLine.length === 0) {
+          curLine.push(w);
+          curY = w.y;
+          curH = w.h;
+        } else {
+          if (Math.abs(w.y - curY) <= curH * 0.45) {
+            curLine.push(w);
+            curY = Math.min(curY, w.y);
+          } else {
+            lines.push(curLine);
+            curLine = [w];
+            curY = w.y;
+            curH = w.h;
+          }
+        }
+      }
+      if (curLine.length > 0) lines.push(curLine);
+      for (const line of lines) {
+        line.sort((a, b) => a.x - b.x);
+        const dominantFs = Math.max(...line.map((w) => w.fs));
+        const minGap = Math.max(5, Math.round(dominantFs * 0.28));
+        const maxBase = Math.max(...line.map((w) => w.base));
+        for (let k = 1; k < line.length; k++) {
+          const prev = line[k - 1];
+          const curr = line[k];
+          if (curr.x < prev.x + prev.w + minGap) {
+            curr.x = prev.x + prev.w + minGap;
+          }
+        }
+        for (const curr of line) {
+          curr.base = maxBase;
+        }
+      }
+      for (let l = 1; l < lines.length; l++) {
+        const prevLine = lines[l - 1];
+        const currLine = lines[l];
+        const prevBottom = Math.max(...prevLine.map((w) => w.y + w.h));
+        const fs = Math.max(...currLine.map((w) => w.fs));
+        const minLineTop = prevBottom + Math.max(3, Math.round(fs * 0.25));
+        const curTop = Math.min(...currLine.map((w) => w.y));
+        if (curTop < minLineTop) {
+          const shiftY = minLineTop - curTop;
+          for (const w of currLine) {
+            w.y += shiftY;
+            w.base += shiftY;
+          }
+        }
+      }
+    }
     onProgress?.("\u0628\u0646\u0627\u0621 \u0643\u0627\u0626\u0646\u0627\u062A \u062C\u062D\u062F\u0631 \u0627\u0644\u0635\u0644\u0628\u0629\u2026", 0.85);
     for (const b of boxes) {
       if (b.isScenery && b.bg) {

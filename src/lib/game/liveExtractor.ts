@@ -400,6 +400,83 @@ export async function extractLiveDocumentLevel(
 
   for (const child of Array.from(body.children)) walk(child, 0)
 
+  // Intra-Block Typography Normalization (prevents word overlap and line collisions):
+  const blockMap = new Map<number, LiveGlyph[]>()
+  for (const g of glyphs) {
+    let list = blockMap.get(g.blockId)
+    if (!list) {
+      list = []
+      blockMap.set(g.blockId, list)
+    }
+    list.push(g)
+  }
+
+  for (const [, words] of blockMap) {
+    if (words.length <= 1) continue
+    words.sort((a, b) => a.y - b.y)
+
+    // Partition into visual lines within this block
+    const lines: LiveGlyph[][] = []
+    let curLine: LiveGlyph[] = []
+    let curY = -1e9
+    let curH = 16
+
+    for (const w of words) {
+      if (curLine.length === 0) {
+        curLine.push(w)
+        curY = w.y
+        curH = w.h
+      } else {
+        if (Math.abs(w.y - curY) <= curH * 0.45) {
+          curLine.push(w)
+          curY = Math.min(curY, w.y)
+        } else {
+          lines.push(curLine)
+          curLine = [w]
+          curY = w.y
+          curH = w.h
+        }
+      }
+    }
+    if (curLine.length > 0) lines.push(curLine)
+
+    // 1. Intra-line: prevent horizontal word collision and maintain min gap
+    for (const line of lines) {
+      line.sort((a, b) => a.x - b.x)
+      const dominantFs = Math.max(...line.map((w) => w.fs))
+      const minGap = Math.max(5, Math.round(dominantFs * 0.28))
+      const maxBase = Math.max(...line.map((w) => w.base))
+
+      for (let k = 1; k < line.length; k++) {
+        const prev = line[k - 1]
+        const curr = line[k]
+        if (curr.x < prev.x + prev.w + minGap) {
+          curr.x = prev.x + prev.w + minGap
+        }
+      }
+      for (const curr of line) {
+        curr.base = maxBase
+      }
+    }
+
+    // 2. Inter-line: prevent vertical overlap between lines of the same paragraph
+    for (let l = 1; l < lines.length; l++) {
+      const prevLine = lines[l - 1]
+      const currLine = lines[l]
+      const prevBottom = Math.max(...prevLine.map((w) => w.y + w.h))
+      const fs = Math.max(...currLine.map((w) => w.fs))
+      const minLineTop = prevBottom + Math.max(3, Math.round(fs * 0.25))
+      const curTop = Math.min(...currLine.map((w) => w.y))
+      if (curTop < minLineTop) {
+        const shiftY = minLineTop - curTop
+        for (const w of currLine) {
+          w.y += shiftY
+          w.base += shiftY
+        }
+      }
+    }
+  }
+
   onProgress?.('بناء كائنات جحدر الصلبة…', 0.85)
 
   // Backdrop Scenery
