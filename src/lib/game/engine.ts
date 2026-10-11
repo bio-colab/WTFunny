@@ -598,10 +598,18 @@ export class DestroyEngine {
 
     // player
     const p = this.player
-    const icon = getWeaponIcon(WEAPONS[p.weaponIdx].id)
+    const curW = WEAPONS[p.weaponIdx]
+    const icon = getWeaponIcon(curW.id)
+    const spr = WEAPON_ICONS[curW.id]
     const kx = p.x - camX
     const ky = p.y - camY
     const charCfg = ConfigManager.get().getConfig().character
+
+    const wa = spr?.anchor
+      ? { dx: spr.anchor.x * 2, dy: spr.anchor.y * 2 }
+      : icon
+      ? { dx: Math.floor(icon.width * 0.28), dy: Math.floor(icon.height * 0.55) }
+      : null
 
     drawCharacter(ctx, kx, ky, {
       facing: p.facing,
@@ -611,9 +619,9 @@ export class DestroyEngine {
       flipT: p.flipT,
       tumble: p.tumble,
       vy: p.vy,
-      aim: p.aim,
+      aim: p.aim + (p.facing === 1 ? p.kickRot : -p.kickRot),
       weapon: icon,
-      weaponAnchor: icon ? { dx: 4, dy: icon.height / 2 } : null,
+      weaponAnchor: wa,
       jetK: p.jetK,
       skin: charCfg.skin,
       colors: {

@@ -341,10 +341,13 @@ async function launchJahdar() {
     }
 
     .weapon-canvas {
-      width: 32px;
-      height: 32px;
+      max-width: 56px;
+      max-height: 28px;
+      width: auto;
+      height: auto;
       image-rendering: pixelated;
       margin-top: 4px;
+      object-fit: contain;
     }
 
     .weapon-name {

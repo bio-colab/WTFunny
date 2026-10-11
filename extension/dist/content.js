@@ -3558,42 +3558,75 @@
 
   // src/lib/game/sprites.ts
   var METAL = {
-    o: "#16121f",
-    // outline
-    d: "#2c3352",
-    // dark metal
-    m: "#46538c",
-    // mid metal
-    l: "#6b7bc4",
-    // light metal
-    h: "#9fb0e8",
-    // highlight
-    c: "#7ff3ff",
-    // cyan glow
-    C: "#1ab8e6",
-    // deep cyan
-    y: "#ffd23d",
-    // yellow
-    r: "#ff3d8b",
-    // pink/red accent
-    R: "#c9281f",
-    // red
-    g: "#7cff6b",
-    // green
-    w: "#ededed",
-    // white
-    b: "#5b4023",
-    // wood/brown
-    B: "#8a6531",
-    // light wood
-    k: "#0d0b12",
-    // near black
-    p: "#c05ae0",
-    // purple
-    P: "#7a2bd0",
-    // deep purple
-    s: "#a0a0a0"
-    // gray
+    // Outline & deep shadows
+    k: "#07090e",
+    // obsidian black / deep shadow
+    o: "#161922",
+    // crisp dark border outline
+    d: "#273549",
+    // deep damascus steel
+    m: "#475569",
+    // damascus steel midtone
+    l: "#8295ab",
+    // tempered light steel
+    h: "#cbd5e1",
+    // steel highlight
+    w: "#ffffff",
+    // pure white specular / bright core
+    // Imperial Gold & Brass (Damascus filigree)
+    Y: "#b45309",
+    // deep antique bronze/gold
+    y: "#f59e0b",
+    // imperial amber gold
+    G: "#fbbf24",
+    // radiant bright gold
+    g: "#fef08a",
+    // pale gold specular highlight
+    // Wood & Grip Inlay
+    b: "#451a03",
+    // dark teak wood
+    B: "#78350f",
+    // rich cedar / walnut
+    i: "#b45309",
+    // polished wood highlight
+    W: "#fef3c7",
+    // ivory inlay
+    // Plasma & Cyan Arc Energy
+    C: "#0369a1",
+    // deep plasma blue
+    c: "#0ea5e9",
+    // vivid cyan conduit
+    a: "#38bdf8",
+    // bright plasma glow
+    e: "#a5f3fc",
+    // glowing plasma white-cyan
+    // Fire, Ruby & Napalm
+    R: "#991b1b",
+    // dark ruby / deep red
+    r: "#ef4444",
+    // vibrant red laser / danger
+    f: "#f97316",
+    // blazing orange flame
+    F: "#fde047",
+    // incandescent yellow fire
+    // Astral & Cosmic Void Purple
+    P: "#581c87",
+    // deep void purple
+    p: "#9333ea",
+    // cosmic amethyst
+    v: "#c084fc",
+    // ethereal purple glow
+    V: "#f3e8ff",
+    // astral starlight violet
+    // Tactical Emerald / Radar
+    E: "#064e3b",
+    // deep emerald shadow
+    T: "#059669",
+    // tactical green
+    t: "#10b981",
+    // bright emerald HUD
+    s: "#6ee7b7"
+    // radar blip / mint glow
   };
   function buildSpriteCanvas(spr, scale = 1) {
     const cv2 = document.createElement("canvas");
@@ -3613,208 +3646,295 @@
     }
     return cv2;
   }
-  var W = (rows) => ({ w: rows[0].length, h: rows.length, data: rows, palette: METAL });
-  var SPR_PISTOL = W([
-    "..................",
-    "..................",
-    "..............cc..",
-    ".ddddddddddddddd..",
-    "ommmmmmmmmmmmmmmo.",
-    ".odmmmmmmmmmmdddo.",
-    "...odd........oo..",
-    "....oddo..........",
-    ".....odo..........",
-    ".....oo..........."
-  ]);
-  var SPR_SMG = W([
-    "......................",
-    "......................",
-    "...................cc.",
-    ".dddddddddddddddddddo.",
-    "ommmmmmmmmmmmmmmmmmmmo",
-    ".ommmmmllllmmmmmmmddo.",
-    "..oddo..odd..oddo.....",
-    "...oddo..oddo.odo.....",
-    "....oo....oo..oo......"
-  ]);
-  var SPR_SHOTGUN = W([
-    "..........................",
-    "..........................",
-    "......................cc..",
-    ".bbbb.....................",
-    "oBBBBbbbbbbbbbbbbbbbbbbbbo",
-    "obbBBmmmllllllllmmmmmdddo.",
-    "..obbodddddddddddddddo....",
-    "....oddo......oddo........",
-    ".....oo........oo........."
-  ]);
-  var SPR_LAUNCHER = W([
-    "..............................",
-    ".....ooooo....................",
-    "....oyyyyyo...................",
-    "....oyRRRRyo..................",
-    "....oyRRRRyooddddddddddddo....",
-    ".oooooyyyyommmmmmmmmmmmmmmo...",
-    "ommmmmmmmmmmmmmmmmmmmdddho....",
-    ".ommmmmmmmooddddddmmddo.......",
-    "..oddo..oddo......oddo........",
-    "...oo....oo........oo........."
-  ]);
-  var SPR_RAILGUN = W([
-    "..............................",
-    "..oooooooo....................",
-    ".oyyyyyyyyo...................",
-    ".oyCCCCCyooddddddddddddddo....",
-    ".oyCcCCCmmmmmmmmmmmmmmmmmo....",
-    ".oyCCCCCmmlllccllmmmmmmddo....",
-    ".oyyyyyyooddddooodddddo.......",
-    "..ooooo.oddo.....oddo.........",
-    ".........oo.......oo.........."
-  ]);
-  var SPR_FLAMER = W([
-    "..........................",
-    "..................oo......",
-    ".....oooooo.....oRRo......",
-    "...ooRRRRRRooo.oRRRo......",
-    "..oRyyyRRRRRRoRRRRRo......",
-    ".oRRyyyRRRRRRRRRRRddo.....",
-    ".oRRRRRRRRRRRRRmmmmo......",
-    "..oRRRRRRRRRmmmmmo........",
-    "...ooddddddmmmoo..........",
-    ".....oddo..oddo...........",
-    "......oo....oo............"
-  ]);
-  var SPR_OVERKILL = W([
-    "..............................",
-    "..............................",
-    "...oooooooooo.................",
-    "..oyyyyyyyyyyo...oooooooo.....",
-    "..oypppppppppyooddddddddo.....",
-    "..oyPPppppppPmmmmmmmmmmmmo....",
-    "..oyppppppppmmmccccmmmmdo.....",
-    "..oyyyyyyyyyoommmmmmmmo.......",
-    "...oooooooo.ooddddo...........",
-    "............oddo..............",
-    ".............oo..............."
-  ]);
-  var SPR_REMOTE = W([
-    "..............",
-    "..oooooooooo..",
-    ".ommmmmmmmmmo.",
-    ".omdgcccgdmo..",
-    ".ommmmmmmmmo..",
-    ".odmmmmmmmdo..",
-    "..oooooooodo..",
-    "........odo...",
-    ".........o...."
-  ]);
-  var SPR_NEUTRON = W([
-    "..............................",
-    "..........ooo.................",
-    ".......oooypyo................",
-    "......oyyppppyyo..............",
-    ".....oyppwwwwppyoddoooo.......",
-    "....oyppwccccwppmmmmmmmo......",
-    "....oyppwccccwppmmllmmmmo.....",
-    ".....oyppwwwwppmmmmmddo.......",
-    "......oyyppppyyodddo..........",
-    ".......oooypyo.oddo...........",
-    "..........ooo...oo............"
-  ]);
-  var SPR_WAND = W([
-    "....................",
-    "...............yy...",
-    "..............ywwy..",
-    "..............ywwy..",
-    "...............yy...",
-    "..............oo....",
-    ".........ooooob.....",
-    "...ooooodbbbbbo.....",
-    "..oyyyyodbbbo.......",
-    "...ooooodbbo........",
-    ".........oo........."
-  ]);
-  var SPR_GRENADE = W([
-    "........",
-    "...oo...",
-    "..osso..",
-    ".osssso.",
-    "ossggsso",
-    "ossggsso",
-    "osssssso",
-    ".osssso.",
-    "..oooo.."
-  ]);
-  var SPR_DRONE = W([
-    "..........................",
-    ".....o.....oo.....o.......",
-    "...oMMMoooMMMMoooMMMo.....",
-    "..ommmmmmmmmmmmmmmmmmo....",
-    ".ommmmcmmmmmmmmmmcmmmmo...",
-    "ommmllooCccccccccCoolmmmo.",
-    "ommmmo.ommmmmmmmmmo.ommmo.",
-    ".oddo..ommccccmmmo..oddo..",
-    "........oodddoo...........",
-    "..........o..o............"
-  ]);
-  var SPR_PARACHUTE = W([
-    "....oooooooo....",
-    "..ooRRyyRRyyoo..",
-    ".oRRyyyyyyRRyo..",
-    "oRRyyywwyyyRRyo.",
-    "oRyywwwwwwyyRo..",
-    ".oyywwwwwwyyo...",
-    "..oyywwwwyyo....",
-    "...oyywwyyo.....",
-    "....oyyyyoo.....",
-    ".....oyyo.......",
-    "......oy........"
-  ]);
-  var SPR_BOMBLET = W([
-    "..oooo..",
-    ".oCCCCo.",
-    "oCCCCCCo",
-    "oCCCCCCo",
-    "oCCwwCCo",
-    "oCCCCCCo",
-    ".oCCCCo.",
-    "..oooo.."
-  ]);
-  var SPR_ROCKET = W([
-    ".....oooo...",
-    "....oRRRRo..",
-    "..ooRRwwRRo.",
-    "oRRRRwwRRRRo",
-    "oyyyywwyyyyo",
-    "..ooRRRRoo..",
-    "....oyyo....",
-    ".....oo....."
-  ]);
-  var SPR_MIRV = W([
-    ".....oo.....",
-    "....oRRo....",
-    "...oRwwRo...",
-    "...oRRRRo...",
-    "..oRRRRRRo..",
-    "..oRwRRwRo..",
-    "..oRRRRRRo..",
-    "..oyyyyyyo..",
-    "...oyyyyyo..",
-    "....oyyo....",
-    ".....oo....."
-  ]);
-  var SPR_JETPACK = W([
-    "...oooo...",
-    "..ommmmo..",
-    ".omddddmo.",
-    ".omdllmdo.",
-    ".omdllmdo.",
-    ".omddddmo.",
-    "..ommmmo..",
-    "..oRRRRo..",
-    "...oRRo...",
-    "....oo...."
-  ]);
+  var W = (rows, anchor) => ({
+    w: rows[0].length,
+    h: rows.length,
+    data: rows,
+    palette: METAL,
+    anchor
+  });
+  var SPR_PISTOL = W(
+    [
+      "......................gg",
+      "............ooo.......yy",
+      ".ooyyoooooooddmoo.....oo",
+      "oodGGyyyydmmmmmmhlhhoooo",
+      "odddddddmmmmmmmmhhhhhdoo",
+      ".oodddddddddddddddddddo.",
+      "...oBBo...oddoo...ooo...",
+      "...oBWBo...oGo..........",
+      "...oBBBo...oo...........",
+      "...oBbBo................",
+      "...oooo................."
+    ],
+    { x: 5, y: 7 }
+  );
+  var SPR_SMG = W(
+    [
+      "..................aaaaaa..",
+      ".......ooooooooooodcccccc.",
+      ".oodddodmmmmmmmmmmddddddoo",
+      "odmmmmdmmhhhhhllmmddddkdoo",
+      "ommmmGyyyyyyyyyymmmmkkhdoo",
+      "oodddddddddddddddddddkkoo.",
+      "..oBBo..oddo..oddoo.......",
+      "..oBBo...oGo...oddo.......",
+      "..oBBo...oo.....oddo......",
+      "...oBo...........oyyo.....",
+      "...oo.............oo......"
+    ],
+    { x: 5, y: 7 }
+  );
+  var SPR_SHOTGUN = W(
+    [
+      "............................",
+      "......................GyyG..",
+      ".oobbbo...............oooooo",
+      "obBBBBbooooooooooooooodhhhhh",
+      "obbBBBddmmmmmmmmGyydmmdhhhhh",
+      ".obbBBdmmmmmmmmmGyydmmdllllh",
+      "..obooddddooooodBBBBBBdooooo",
+      "....oddo..oGoo..oBBBBBbo....",
+      "....oddo..oo....obBBBBbo....",
+      ".....oo..........oooooo....."
+    ],
+    { x: 6, y: 7 }
+  );
+  var SPR_LAUNCHER = W(
+    [
+      ".........................oo...",
+      ".....ooooo..............oRRo..",
+      "...ooyyyyyoo............oRRRRo",
+      "..oyyGGGGGyyoodddddddddooRRRRo",
+      ".odmmmmmmmmmmddddddddddddyGyyG",
+      "ommmmhhhhhmmmmmmdttddmmmmooo..",
+      "ommmmhhhhhmmmmmmdssddmmmmoo...",
+      "odmmmmmmmmmmdddddddddddddoo...",
+      ".oooddddddddooooddddddooo.....",
+      "...oddo..oddo....oddoo........",
+      "...oBBo...oGo.....oddo........",
+      "...oBBo...oo......oddo........",
+      "....oo.............oo........."
+    ],
+    { x: 6, y: 9 }
+  );
+  var SPR_RAILGUN = W(
+    [
+      ".........oooooo.................",
+      "........ocaaaeeo................",
+      "..oooooooddddddooooooooooooooooo",
+      ".oyyyyGhooddddddmmmmmmmmhhhhhhhh",
+      "oyGwwwyhoocaaoocaaoocaaoeeeeeeee",
+      "oyGwwwyhoocaaoocaaoocaaoeeeeeeee",
+      ".oyyyyGhooddddddmmmmmmmmhhhhhhhh",
+      "..oooddddddddddddddddddddooooooo",
+      "....oddo..oddo...oddoo..........",
+      "....oBBo...oGo....oddo..........",
+      "....oBBo...oo.....oddo..........",
+      ".....oo............oo..........."
+    ],
+    { x: 7, y: 9 }
+  );
+  var SPR_FLAMER = W(
+    [
+      "......................oo....",
+      "....ooooo...........oFrfo...",
+      "...oyyyyyoo........oFFffro..",
+      "..oyyGffGyyoooddddoofffrfo..",
+      ".oyGffwwffyommmmmmoffffro...",
+      ".oyyGffGyyoohhhhhhmooooo....",
+      "..oyyyyyoodmmmmmmmdddddo....",
+      "...oooooodmmmmmmmmddkddo....",
+      "....oddooodddddddddddkdo....",
+      "....oBBo..oddo....oodddo....",
+      "....oBBo...oGo......oddo....",
+      "....oBBo...oo.......oddo....",
+      ".....oo..............oo....."
+    ],
+    { x: 6, y: 10 }
+  );
+  var SPR_OVERKILL = W(
+    [
+      "..............................",
+      "....ooooooo...................",
+      "...oyyGGGyyo.....ooooooo......",
+      "..oyGvvvvGyyooddddddddddo.....",
+      "..oyvwwwwvyommmmmmmmmmmmmo....",
+      ".oyGvwwwwvGyommmmmmmmmmmmmo...",
+      ".oyGvvvvvvGyomhhllllhhhhhmmo..",
+      "..oyyGGGGyyommmddkddkddmmmmo..",
+      "...ooooooooodddddddddddddddo..",
+      ".....oddo...oddo.....odddddo..",
+      ".....oBBo....oGo......oddooo..",
+      ".....oBBo....oo.......oddo....",
+      ".....oBBo.............oddo....",
+      "......oo...............oo....."
+    ],
+    { x: 7, y: 10 }
+  );
+  var SPR_REMOTE = W(
+    [
+      ".o....................",
+      ".oa...................",
+      ".oo..oooooooooooo.....",
+      ".oo.oyGGGGGGGGGGyo....",
+      ".oo.oGddddddddddGo....",
+      ".oo.oGdTtssssTtGGo....",
+      ".o..oGdtsswwsstddGo...",
+      "....oGdtsssssstddGo...",
+      "....oGdTtssssTtGGo....",
+      "....oGddddddddddGo....",
+      "....oyGGGradrGyyyo....",
+      "....oooooooooooooo....",
+      ".....oBBo....oBBo.....",
+      "......oo......oo......"
+    ],
+    { x: 6, y: 10 }
+  );
+  var SPR_NEUTRON = W(
+    [
+      "..........oooo..................",
+      ".......ooyyGGyyo................",
+      ".....ooyGvaaaevyyo..............",
+      "....oyGvaawwwwaevGyooddddddooo..",
+      "...oyvaawwwwwwwaavGommmmmmmhhhoo",
+      "..oyGawwweeeeeewwaGyomhhhhhhwwwe",
+      "..oyGawweecceewwaGyommhhhhhhwwwe",
+      "..oyGawwweeeeeewwaGyomhhhhhhwwwe",
+      "...oyvaawwwwwwwaavGommmmmmmhhhoo",
+      "....oyGvaawwwwaevGyooddddddooo..",
+      ".....ooyGvaaaevyyo..oddo........",
+      ".......ooyyGGyyo...oBBo.........",
+      "..........oooo.....oBBo.........",
+      "....................oo.........."
+    ],
+    { x: 7, y: 9 }
+  );
+  var SPR_WAND = W(
+    [
+      ".......................ooo..",
+      ".....................ooygyoo",
+      "....................oyGfwwfG",
+      "...................oyGfrwwrf",
+      "..................oyyGfwwfGy",
+      ".................oyyyGGggGGy",
+      "...............ooooyyGGyyoo.",
+      "............ooodBByyoooo....",
+      ".........ooodBBbByGoo.......",
+      "......ooodBBbByGooo.........",
+      "....ooodBBbByGoo............",
+      "..oyygbBBbByoo..............",
+      "..oygBoooooo................",
+      "...oo......................."
+    ],
+    { x: 6, y: 9 }
+  );
+  var SPR_GRENADE = W(
+    [
+      "...oooo...",
+      "..oGyyGo..",
+      ".oddrrddo.",
+      "oddddddddo",
+      "odmGyGdmdo",
+      "odmGyGdmdo",
+      "oddddddddo",
+      ".oddddddo.",
+      "..oddddo..",
+      "...oooo..."
+    ],
+    { x: 4, y: 5 }
+  );
+  var SPR_ROCKET = W(
+    [
+      "......oooo......",
+      "....ooRRRRoo....",
+      "..ooRRwwwwRRoo..",
+      ".oRRRRwwwwRRRRo.",
+      ".oyyyywwwwyyyyo.",
+      "..oooddddddooo..",
+      "....ofFFFffo....",
+      ".....offffo....."
+    ],
+    { x: 4, y: 4 }
+  );
+  var SPR_MIRV = W(
+    [
+      ".....oooooo.....",
+      "....oRRRRRRo....",
+      "...oRRwwwwRRo...",
+      "..oRRRRwwRRRRo..",
+      ".oRRRRRRRRRRRRo.",
+      ".oyyGyyyyyyGyyo.",
+      ".ommmmmmmmmmmmo.",
+      "..omddkddkddmo..",
+      "..oyyyyyyyyyyo..",
+      "...ofFFFFffo....",
+      "....offfffo....."
+    ],
+    { x: 4, y: 5 }
+  );
+  var SPR_BOMBLET = W(
+    [
+      "...oooo...",
+      "..oCCCCo..",
+      ".oCaeeaCo.",
+      ".oaeeweaCo",
+      ".oaeeweaCo",
+      ".oCaeeaCo.",
+      "..oCCCCo..",
+      "...oooo..."
+    ],
+    { x: 4, y: 4 }
+  );
+  var SPR_PARACHUTE = W(
+    [
+      ".....oooooooo.....",
+      "...ooRRyyyGGyoo...",
+      "..oRRyyyyyyyyyRRo.",
+      ".oRRyyyywwwwyyyRRo",
+      ".oRyywwwwwwwwyyyRo",
+      "..oyywwwwwwwwyyo..",
+      "...oyywwwwwwyyo...",
+      "....oyywwwwyyo....",
+      ".....oyyyyyo......",
+      "......oyyyy.......",
+      ".......oyy........",
+      "........oo........"
+    ],
+    { x: 8, y: 11 }
+  );
+  var SPR_JETPACK = W(
+    [
+      "....oooooo....",
+      "..oommGGmmoo..",
+      ".omddyyyydmmo.",
+      ".omdllmmllmmo.",
+      ".omdllmmllmmo.",
+      ".omddyyyydmmo.",
+      "..oommGGmmoo..",
+      "..oodkddkddoo.",
+      "..oFrroorrFo..",
+      "..oFFroorFFo..",
+      "...ff....ff..."
+    ],
+    { x: 6, y: 5 }
+  );
+  var SPR_DRONE = W(
+    [
+      ".....o.....oooo.....o.......",
+      "...oMMoooMMMMMMMMoooMMMo....",
+      "..ommmmmmmmmmmmmmmmmmmmo....",
+      ".ommmmyymmmmmmmmmmyymmmmo...",
+      "ommmhhllCccccccccCoolhhmmmo.",
+      "ommmmo..ocaaeewwaaco..ommmo.",
+      ".oddo...ocaaeewwaaco...oddo.",
+      "........ommccccmmmo.........",
+      ".........oodddddoo..........",
+      "...........o...o............",
+      "............................"
+    ],
+    { x: 13, y: 5 }
+  );
   var WEAPON_ICONS = {
     pistol: SPR_PISTOL,
     smg: SPR_SMG,
@@ -4034,16 +4154,18 @@
     ctx.translate(0, -34);
     const aimLocal = opts.facing === 1 ? opts.aim : Math.PI - opts.aim;
     ctx.rotate(aimLocal);
+    const handX = 9;
+    const handY = 1;
     ctx.strokeStyle = colors.accent;
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 3.5;
     ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(10, 2);
+    ctx.moveTo(-1, 2);
+    ctx.lineTo(handX - 2, handY + 1);
     ctx.stroke();
     if (opts.weapon && opts.weaponAnchor) {
       const wa = opts.weaponAnchor;
       ctx.save();
-      ctx.rotate(Math.PI);
+      ctx.translate(handX, handY);
       ctx.drawImage(opts.weapon, -wa.dx, -wa.dy);
       ctx.restore();
     }
@@ -4051,8 +4173,12 @@
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(11, 1);
+    ctx.lineTo(handX, handY);
     ctx.stroke();
+    ctx.fillStyle = colors.accent || colors.body;
+    ctx.beginPath();
+    ctx.arc(handX, handY, 2.5, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
     ctx.restore();
   }
@@ -5270,10 +5396,13 @@
       world.draw(ctx, camX, camY, this.viewW, this.viewH);
       drawEntities(ctx, world, this.es, camX, camY);
       const p = this.player;
-      const icon = getWeaponIcon(WEAPONS[p.weaponIdx].id);
+      const curW = WEAPONS[p.weaponIdx];
+      const icon = getWeaponIcon(curW.id);
+      const spr = WEAPON_ICONS[curW.id];
       const kx = p.x - camX;
       const ky = p.y - camY;
       const charCfg = ConfigManager.get().getConfig().character;
+      const wa = spr?.anchor ? { dx: spr.anchor.x * 2, dy: spr.anchor.y * 2 } : icon ? { dx: Math.floor(icon.width * 0.28), dy: Math.floor(icon.height * 0.55) } : null;
       drawCharacter(ctx, kx, ky, {
         facing: p.facing,
         runPhase: p.runPhase,
@@ -5282,9 +5411,9 @@
         flipT: p.flipT,
         tumble: p.tumble,
         vy: p.vy,
-        aim: p.aim,
+        aim: p.aim + (p.facing === 1 ? p.kickRot : -p.kickRot),
         weapon: icon,
-        weaponAnchor: icon ? { dx: 4, dy: icon.height / 2 } : null,
+        weaponAnchor: wa,
         jetK: p.jetK,
         skin: charCfg.skin,
         colors: {
@@ -6136,10 +6265,13 @@
     }
 
     .weapon-canvas {
-      width: 32px;
-      height: 32px;
+      max-width: 56px;
+      max-height: 28px;
+      width: auto;
+      height: auto;
       image-rendering: pixelated;
       margin-top: 4px;
+      object-fit: contain;
     }
 
     .weapon-name {

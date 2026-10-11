@@ -10,7 +10,7 @@ import {
   DEFAULT_PHYSICS,
 } from '@/lib/game/engineConfig'
 import { WEAPONS } from '@/lib/game/weapons'
-import { drawCharacter, WEAPON_ICONS, paintSpriteInto } from '@/lib/game/sprites'
+import { drawCharacter, WEAPON_ICONS, paintSpriteInto, getCachedSprite } from '@/lib/game/sprites'
 import { sound } from '@/lib/game/sound'
 
 type LabTab = 'characters' | 'weapons' | 'physics' | 'audio' | 'visuals' | 'maps'
@@ -115,7 +115,13 @@ export default function GameLab({ open, onClose, onPlayMap }: GameLabProps) {
       }
 
       const runPhase = isRunning ? (t * 2.2) % 1 : 0
-      const currentWeaponSpr = WEAPON_ICONS[selectedWeapon] ? cv : null
+      const spr = WEAPON_ICONS[selectedWeapon]
+      const currentWeaponIcon = getCachedSprite(selectedWeapon, 2)
+      const wa = spr?.anchor
+        ? { dx: spr.anchor.x * 2, dy: spr.anchor.y * 2 }
+        : currentWeaponIcon
+        ? { dx: Math.floor(currentWeaponIcon.width * 0.28), dy: Math.floor(currentWeaponIcon.height * 0.55) }
+        : null
 
       drawCharacter(ctx, cv.width / 2, renderY, {
         facing: 1,
@@ -126,8 +132,8 @@ export default function GameLab({ open, onClose, onPlayMap }: GameLabProps) {
         tumble: 0,
         vy,
         aim: 0,
-        weapon: currentWeaponSpr,
-        weaponAnchor: { dx: 4, dy: 8 },
+        weapon: currentWeaponIcon,
+        weaponAnchor: wa,
         jetK: isJet ? 1 : 0,
         scale: 1.4,
         skin: cfg.character.skin,
