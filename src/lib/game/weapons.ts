@@ -64,6 +64,10 @@ export type Rocket = {
   chute: boolean
   fuse: number
   smokeT: number
+  targetX?: number
+  targetY?: number
+  targetDist?: number
+  distTraveled?: number
 }
 
 export type Grenade = {
@@ -74,6 +78,8 @@ export type Grenade = {
   fuse: number
   rot: number
   vrot: number
+  targetX?: number
+  targetY?: number
 }
 
 export type Drone = {
@@ -99,6 +105,11 @@ export type Star = {
   r: number
   maxR: number
   rot: number
+  targetX?: number
+  targetY?: number
+  targetDist?: number
+  distTraveled?: number
+  anchored?: boolean
 }
 
 export type WandCast = {
@@ -109,6 +120,8 @@ export type WandCast = {
   charge: number
   fired: boolean
   swept: number
+  targetX?: number
+  targetY?: number
 }
 
 export type WeaponEntities = {
@@ -146,13 +159,25 @@ export function fireWeapon(
   pan: number,
   onShake: (s: number) => void,
   onKick: (vx: number, vy: number) => void,
-  onShot: () => void
+  onShot: () => void,
+  targetX?: number,
+  targetY?: number
 ) {
   onShot()
   const cos = Math.cos(aim)
   const sin = Math.sin(aim)
   const mzX = x + cos * 30
   const mzY = y + sin * 30
+
+  // Calculate true line of sight from muzzle directly TO the cursor target (zero parallax)
+  const tx = targetX ?? (x + cos * 600)
+  const ty = targetY ?? (y + sin * 600)
+  const tDx = tx - mzX
+  const tDy = ty - mzY
+  const targetDist = Math.hypot(tDx, tDy)
+  const trueAim = targetDist > 4 ? Math.atan2(tDy, tDx) : aim
+  const trueCos = Math.cos(trueAim)
+  const trueSin = Math.sin(trueAim)
 
   const cfg = ConfigManager.get().getConfig()
   const wTune = cfg.weapons[w.id] || { damageMul: 1, speedMul: 1, cooldownMul: 1, blastMul: 1, shakeMul: 1 }
@@ -163,12 +188,12 @@ export function fireWeapon(
   switch (w.kind) {
     case 'bullet': {
       for (let i = 0; i < w.pellets; i++) {
-        const a = aim + (Math.random() - 0.5) * w.spread * 2
+        const a = trueAim + (Math.random() - 0.5) * w.spread * 2
         const jitter = w.pellets > 1 ? (Math.random() - 0.5) * 120 : 0
         spawnBullet(
           es,
-          x + cos * 26,
-          y + sin * 26,
+          mzX,
+          mzY,
           Math.cos(a) * (effSpeed + jitter),
           Math.sin(a) * (effSpeed + jitter),
           effDmg,
@@ -179,37 +204,54 @@ export function fireWeapon(
       sound.shot(w.id === 'pistol' ? 'pistol' : w.id === 'smg' ? 'smg' : 'shotgun', 1, pan)
       // muzzle flash particles
       for (let i = 0; i < 4; i++) {
-        world.spawnParticle({ x: mzX, y: mzY, vx: cos * 300 + (Math.random() - 0.5) * 200, vy: sin * 300 + (Math.random() - 0.5) * 200, life: 0.1, max: 0.1, kind: 'spark', color: '#fff3a6', size: 3 })
+        world.spawnParticle({ x: mzX, y: mzY, vx: trueCos * 300 + (Math.random() - 0.5) * 200, vy: trueSin * 300 + (Math.random() - 0.5) * 200, life: 0.1, max: 0.1, kind: 'spark', color: '#fff3a6', size: 3 })
       }
       // shell eject
       world.spawnParticle({ x: x + cos * 10, y: y + sin * 10, vx: -cos * 100 + (Math.random() - 0.5) * 60, vy: -260 - Math.random() * 120, life: 1, max: 1, kind: 'shell', color: '#e9b54a', size: 2.5, grav: 1900, rot: Math.random() * 6, vrot: 12 })
       onShake(effShake)
-      if (w.push > 0) onKick(-cos * w.push, -sin * w.push * 0.4)
+      if (w.push > 0) onKick(-trueCos * w.push, -trueSin * w.push * 0.4)
       if (w.kick > 0) onKick(0, 0)
       break
     }
     case 'rocket': {
-      es.rockets.push({ x: mzX, y: mzY, vx: cos * effSpeed, vy: sin * effSpeed, life: 3, state: 0, bomblets: 0, chute: false, fuse: 3, smokeT: 0 })
+      // Clamped target distance within weapon range limits (max 1600px)
+      const clampedDist = Math.min(1600, Math.max(30, targetDist))
+      es.rockets.push({
+        x: mzX,
+        y: mzY,
+        vx: trueCos * effSpeed,
+        vy: trueSin * effSpeed,
+        life: 3.5,
+        state: 0,
+        bomblets: 0,
+        chute: false,
+        fuse: 3.5,
+        smokeT: 0,
+        targetX: mzX + trueCos * clampedDist,
+        targetY: mzY + trueSin * clampedDist,
+        targetDist: clampedDist,
+        distTraveled: 0,
+      })
       sound.whoosh(pan)
       onShake(effShake)
-      onKick(-cos * w.push * 0.5, -sin * w.push * 0.2)
+      onKick(-trueCos * w.push * 0.5, -trueSin * w.push * 0.2)
       break
     }
     case 'rail': {
-      // instant piercing beam
+      // instant piercing beam directly along the true target ray
       const maxD = 3000
       const step = CELL * 0.8
-      let cx = x
-      let cy = y
+      let cx = mzX
+      let cy = mzY
       const hitPts: { x: number; y: number }[] = []
       const carveR = (4.5 + Math.random() * 3) * (wTune.blastMul ?? 1)
       for (let d = 0; d < maxD; d += step) {
-        cx += cos * step
-        cy += sin * step
+        cx += trueCos * step
+        cy += trueSin * step
         if (cx < 0 || cx > world.W || cy > world.H) break
         if (world.solidAtWorld(cx, cy)) {
           hitPts.push({ x: cx, y: cy })
-          world.hitBodyAt(cx, cy, effDmg, cos * 340, sin * 340)
+          world.hitBodyAt(cx, cy, effDmg, trueCos * 340, trueSin * 340)
           // carve & blast
           if (hitPts.length % 2 === 1) {
             world.damageCircle(cx, cy, carveR, { debris: true, countAsDestroy: true, impulse: 450 })
@@ -217,22 +259,43 @@ export function fireWeapon(
           }
         }
       }
+      // Focal blast directly at target cursor point
+      if (targetDist < maxD) {
+        world.damageCircle(tx, ty, carveR * 1.6, { debris: true, countAsDestroy: true, impulse: 550 })
+        for (let k = 0; k < 6; k++) {
+          world.spawnParticle({
+            x: tx,
+            y: ty,
+            vx: (Math.random() - 0.5) * 350,
+            vy: (Math.random() - 0.5) * 350,
+            life: 0.35,
+            max: 0.35,
+            kind: 'spark',
+            color: '#a5f3fc',
+            size: 3.5,
+          })
+        }
+      }
       // beam fx via particles
-      for (let d = 0; d < Math.hypot(cx - x, cy - y); d += 14) {
-        world.spawnParticle({ x: x + cos * d, y: y + sin * d, vx: (Math.random() - 0.5) * 60, vy: (Math.random() - 0.5) * 60, life: 0.35, max: 0.35, kind: 'spark', color: d % 28 < 14 ? '#7ff3ff' : '#ffffff', size: 4 })
+      const beamLen = Math.hypot(cx - mzX, cy - mzY)
+      for (let d = 0; d < beamLen; d += 14) {
+        world.spawnParticle({ x: mzX + trueCos * d, y: mzY + trueSin * d, vx: (Math.random() - 0.5) * 60, vy: (Math.random() - 0.5) * 60, life: 0.35, max: 0.35, kind: 'spark', color: d % 28 < 14 ? '#7ff3ff' : '#ffffff', size: 4 })
       }
       sound.railCharge(pan)
       setTimeout(() => sound.rail(pan), 90)
       onShake(effShake)
-      onKick(-cos * w.push, -160)
+      onKick(-trueCos * w.push, -160)
       break
     }
     case 'flame': {
+      const maxFlameRange = 340
+      const reach = Math.min(maxFlameRange, Math.max(60, targetDist))
       for (let i = 0; i < 3; i++) {
-        const a = aim + (Math.random() - 0.5) * w.spread * 2.4
+        const a = trueAim + (Math.random() - 0.5) * w.spread * 2.4
         const sp = effSpeed * (0.65 + Math.random() * 0.7)
+        const particleLife = (reach / sp) * (0.8 + Math.random() * 0.4)
         if (es.flames.length < 500) {
-          es.flames.push({ x: mzX, y: mzY, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.5 + Math.random() * 0.3, max: 0.8 })
+          es.flames.push({ x: mzX, y: mzY, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: particleLife, max: particleLife })
         }
       }
       if (Math.random() < 0.24) sound.flameBurst(0.8, pan)
@@ -240,31 +303,53 @@ export function fireWeapon(
       break
     }
     case 'mirv': {
-      es.rockets.push({ x: mzX, y: mzY, vx: cos * effSpeed * 0.55, vy: sin * effSpeed * 0.55 - 500, life: 4, state: 0, bomblets: 8, chute: false, fuse: 4, smokeT: 0 })
+      const clampedDist = Math.min(1800, Math.max(80, targetDist))
+      es.rockets.push({
+        x: mzX,
+        y: mzY,
+        vx: trueCos * effSpeed * 0.55,
+        vy: trueSin * effSpeed * 0.55 - 280,
+        life: 4,
+        state: 0,
+        bomblets: 8,
+        chute: false,
+        fuse: 4,
+        smokeT: 0,
+        targetX: tx,
+        targetY: ty,
+        targetDist: clampedDist,
+        distTraveled: 0,
+      })
       sound.whoosh(pan)
       onShake(effShake)
-      onKick(-cos * w.push * 0.4, -120)
+      onKick(-trueCos * w.push * 0.4, -120)
       break
     }
     case 'star': {
+      const clampedDist = Math.min(1400, Math.max(40, targetDist))
       es.star = {
         x: mzX,
         y: mzY,
-        vx: cos * effSpeed,
-        vy: sin * effSpeed,
+        vx: trueCos * effSpeed,
+        vy: trueSin * effSpeed,
         t: 0,
-        dur: 2.9,
+        dur: 3.2,
         r: 20 * (wTune.blastMul ?? 1),
-        maxR: 150 * (wTune.blastMul ?? 1),
+        maxR: 155 * (wTune.blastMul ?? 1),
         rot: 0,
+        targetX: tx,
+        targetY: ty,
+        targetDist: clampedDist,
+        distTraveled: 0,
+        anchored: false,
       }
       sound.starHum(pan)
       onShake(effShake)
-      onKick(-cos * w.push * 0.3, -80)
+      onKick(-trueCos * w.push * 0.3, -80)
       break
     }
     case 'wand': {
-      es.wand = { x, y, aim, t: 0, charge: 0.55, fired: false, swept: 0 }
+      es.wand = { x, y, aim: trueAim, t: 0, charge: 0.55, fired: false, swept: 0, targetX: tx, targetY: ty }
       sound.wandCast(pan)
       break
     }
@@ -274,8 +359,40 @@ export function fireWeapon(
   }
 }
 
-export function throwGrenade(world: World, es: WeaponEntities, x: number, y: number, aim: number, power: number) {
-  es.grenades.push({ x, y, vx: Math.cos(aim) * power, vy: Math.sin(aim) * power - 160, fuse: GRENADE.fuse, rot: 0, vrot: (Math.random() - 0.5) * 14 })
+export function throwGrenade(
+  world: World,
+  es: WeaponEntities,
+  x: number,
+  y: number,
+  aim: number,
+  power: number,
+  targetX?: number,
+  targetY?: number
+) {
+  const g = 2000 // grenade gravity in stepEntities
+  const tx = targetX ?? (x + Math.cos(aim) * 350)
+  const ty = targetY ?? (y + Math.sin(aim) * 350)
+  const dx = tx - x
+  const dy = ty - y
+  const dist = Math.hypot(dx, dy)
+
+  // Distance-calibrated ballistic throw velocity
+  const clampedDist = Math.min(750, Math.max(40, dist))
+  const T = Math.min(1.1, Math.max(0.35, Math.sqrt((2 * clampedDist) / g) * 1.1))
+  const throwVx = (dx / (dist || 1)) * (clampedDist / T)
+  const throwVy = (dy - 0.5 * g * T * T) / T
+
+  es.grenades.push({
+    x,
+    y,
+    vx: Math.max(-800, Math.min(800, throwVx)),
+    vy: Math.max(-950, Math.min(400, throwVy)),
+    fuse: Math.max(0.8, T + 0.35),
+    rot: 0,
+    vrot: (Math.random() - 0.5) * 14,
+    targetX: tx,
+    targetY: ty,
+  })
   sound.click()
   void world
 }
@@ -375,16 +492,22 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     r.life -= dt
     r.smokeT -= dt
     if (r.state === 0) {
-      r.vy += 320 * dt // slight arc
-      r.x += r.vx * dt
-      r.y += r.vy * dt
+      r.vy += (r.bomblets > 0 ? 320 : 60) * dt // slight arc
+      const stepX = r.vx * dt
+      const stepY = r.vy * dt
+      r.x += stepX
+      r.y += stepY
+      r.distTraveled = (r.distTraveled ?? 0) + Math.hypot(stepX, stepY)
+
       if (r.smokeT <= 0) {
         r.smokeT = 0.03
         world.spawnParticle({ x: r.x, y: r.y + 4, vx: (Math.random() - 0.5) * 40, vy: 60 + Math.random() * 60, life: 0.5, max: 0.5, kind: 'smoke', color: '#5b5566', size: 3 + Math.random() * 3 })
         world.spawnParticle({ x: r.x, y: r.y + 4, vx: 0, vy: 40, life: 0.12, max: 0.12, kind: 'spark', color: '#ffd23d', size: 3 })
       }
       const hitWorld = r.x < 0 || r.x > world.W || (r.y >= 0 && r.y < world.H && world.mat[world.idx(Math.floor(r.x / CELL), Math.floor(r.y / CELL))] !== 0)
-      if (hitWorld || r.y > world.H) {
+      const targetReached = r.targetDist !== undefined && r.distTraveled >= r.targetDist
+
+      if (hitWorld || targetReached || r.y > world.H) {
         if (r.bomblets > 0) {
           // MIRV split: spawn 8 parachute bomblets
           r.state = 1
@@ -408,7 +531,9 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
           es.rockets.splice(i, 1)
           continue
         }
-        explodeAt(world, es, r.x, r.y, ROCKET_BLAST, { scorch: true })
+        const detX = targetReached && !hitWorld && r.targetX !== undefined ? r.targetX : r.x
+        const detY = targetReached && !hitWorld && r.targetY !== undefined ? r.targetY : r.y
+        explodeAt(world, es, detX, detY, ROCKET_BLAST, { scorch: true })
         es.rockets.splice(i, 1)
         continue
       }
@@ -453,7 +578,8 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     if (world.solidAtWorld(g.x + Math.sign(g.vx) * 6, g.y)) {
       g.vx *= -0.5
     }
-    if (g.fuse <= 0) {
+    const nearTarget = g.targetX !== undefined && g.targetY !== undefined && Math.hypot(g.x - g.targetX, g.y - g.targetY) < 24 && g.fuse < 0.6
+    if (g.fuse <= 0 || nearTarget) {
       explodeAt(world, es, g.x, g.y, GRENADE.radius, { scorch: true })
       es.grenades.splice(i, 1)
     }
@@ -550,10 +676,30 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
   if (st) {
     st.t += dt
     st.rot += dt * 3
-    if (st.t < 0.5) {
+    if (!st.anchored) {
+      const stepDist = Math.hypot(st.vx * dt, st.vy * dt)
       st.x += st.vx * dt
       st.y += st.vy * dt
       if (st.y < 0) st.y = 0
+      st.distTraveled = (st.distTraveled ?? 0) + stepDist
+      const hitDense =
+        st.x >= 0 &&
+        st.x < world.W &&
+        st.y >= 0 &&
+        st.y < world.H &&
+        world.mat[world.idx(Math.floor(st.x / CELL), Math.floor(st.y / CELL))] !== 0
+      const reachedTarget = st.targetDist !== undefined && st.distTraveled >= st.targetDist
+
+      if (reachedTarget || hitDense) {
+        st.anchored = true
+        st.vx = 0
+        st.vy = 0
+        if (reachedTarget && st.targetX !== undefined && st.targetY !== undefined) {
+          st.x = st.targetX
+          st.y = st.targetY
+        }
+        sound.pop(0)
+      }
     }
     st.r = Math.min(st.maxR, 30 + st.t * 110)
     // suck cells

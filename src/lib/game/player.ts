@@ -115,7 +115,7 @@ export class Player {
   }
 
   private isGroundedAt(world: World, py: number): boolean {
-    const feetOffsets = [-5, 0, 5]
+    const feetOffsets = [-6, -3, 0, 3, 6]
     for (const dx of feetOffsets) {
       if (this.solidAt(world, this.x + dx, py + 1)) return true
     }
@@ -148,13 +148,14 @@ export class Player {
 
     const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0)
 
-    // Aim calculation
-    const c = this.center()
-    const aimDx = input.aimX - c.x
-    const aimDy = input.aimY - c.y
+    // Aim calculation directly from shoulder joint to cursor (eliminates parallax error)
+    const shoulderX = this.x
+    const shoulderY = this.y - 34
+    const aimDx = input.aimX - shoulderX
+    const aimDy = input.aimY - shoulderY
     if (Math.abs(aimDx) > 2 || Math.abs(aimDy) > 2) {
       this.aim = Math.atan2(aimDy, aimDx)
-      if (Math.abs(aimDx) > 5) {
+      if (Math.abs(aimDx) > 4) {
         this.facing = aimDx >= 0 ? 1 : -1
       }
     }
@@ -368,7 +369,22 @@ export class Player {
         this.flips = 1
         this.jetOn = false
       } else {
-        this.grounded = false
+        // Ground snapping: if previously grounded and moving across uneven/destroyed terrain without jumping
+        let snapped = false
+        if (oldGrounded && this.dropT <= 0 && this.buffer <= 0 && !input.jump && this.vy < 280) {
+          for (let snap = 1; snap <= 6; snap++) {
+            if (this.isGroundedAt(world, this.y + snap)) {
+              this.y += snap
+              this.vy = 0
+              this.grounded = true
+              snapped = true
+              break
+            }
+          }
+        }
+        if (!snapped) {
+          this.grounded = false
+        }
       }
     } else {
       // Ascending: check head collision & corner nudge

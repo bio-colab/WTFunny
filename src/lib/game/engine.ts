@@ -416,11 +416,24 @@ export class DestroyEngine {
         p.cooldown = 0.35 * (wTune.cooldownMul ?? 1)
       } else if (w.auto || !this.fireHeld) {
         const pan = 0
-        fireWeapon(world, this.es, w, p.x, p.y - 34, p.aim, pan, (s) => (this.shake = Math.max(this.shake, s)), (vx, vy) => p.impulse(vx, vy), () => {
-          p.shots++
-          p.flashT = 0.06
-          p.kickRotV -= w.kick * 0.35
-        })
+        fireWeapon(
+          world,
+          this.es,
+          w,
+          p.x,
+          p.y - 34,
+          p.aim,
+          pan,
+          (s) => (this.shake = Math.max(this.shake, s)),
+          (vx, vy) => p.impulse(vx, vy),
+          () => {
+            p.shots++
+            p.flashT = 0.06
+            p.kickRotV -= w.kick * 0.35
+          },
+          this.input.aimX,
+          this.input.aimY
+        )
         p.cooldown = w.cooldown * (wTune.cooldownMul ?? 1)
         this.fireHeld = true
       }
@@ -436,13 +449,22 @@ export class DestroyEngine {
     if (inp.altPressed && p.grenadeCd <= 0 && !this.done) {
       const d = this.es.drone
       if (d && d.state === 0 && Math.hypot(d.x - p.x, d.y - p.y) < 900) {
-        // dive-bomb with drone
+        // dive-bomb with drone directly into aim target
         d.state = 1
-        d.vx = p.vx
-        d.vy = 100
+        d.vx = (this.input.aimX - d.x) * 1.5
+        d.vy = Math.max(120, (this.input.aimY - d.y) * 1.5)
         sound.droneBeep(0)
       } else {
-        throwGrenade(world, this.es, p.x + Math.cos(p.aim) * 20, p.y - 34 + Math.sin(p.aim) * 20, p.aim, GRENADE.speed)
+        throwGrenade(
+          world,
+          this.es,
+          p.x + Math.cos(p.aim) * 20,
+          p.y - 34 + Math.sin(p.aim) * 20,
+          p.aim,
+          GRENADE.speed,
+          this.input.aimX,
+          this.input.aimY
+        )
         p.grenadeCd = GRENADE.cooldown
       }
       this.input.alt = false
