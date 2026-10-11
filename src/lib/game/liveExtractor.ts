@@ -236,6 +236,9 @@ export async function extractLiveDocumentLevel(
     const tag = node.tagName.toLowerCase()
     if (SKIP_TAGS.has(tag)) return
     if (node.id === 'jahdar-root') return
+    const isSrOnly = !!node.closest?.('.sr-only, .visually-hidden, .primer-sr-only, .screen-reader-text, [hidden]')
+    if (isSrOnly) return
+
     if (node.className && typeof node.className === 'string') {
       const cls = node.className.toLowerCase()
       if (SKIP_CLASSES.some((sc) => cls.includes(sc))) return
@@ -245,6 +248,8 @@ export async function extractLiveDocumentLevel(
     if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return
     const op = parseFloat(cs.opacity || '1')
     if (op < 0.02) return
+    if (cs.clip && cs.clip.includes('0px')) return
+    if (cs.clipPath && cs.clipPath.includes('0px')) return
 
     let blockId = curBlockId
     const isButton = tag === 'button' || node.getAttribute('role') === 'button'

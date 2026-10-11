@@ -4851,6 +4851,8 @@
       this.site = "";
       this.weaponNameT = 0;
       this.mouseInside = true;
+      this.clientMouseX = 0;
+      this.clientMouseY = 0;
       this.backdropCanvas = null;
       this.opts = null;
       this.fireHeld = false;
@@ -5037,6 +5039,8 @@
       this.weaponNameT = 1.4;
     }
     onMouseMove(x, y) {
+      this.clientMouseX = x;
+      this.clientMouseY = y;
       this.input.aimX = x + this.camX;
       this.input.aimY = y + this.camY;
       this.mouseInside = true;
@@ -5292,8 +5296,8 @@
         }
       });
       world.drawParticles(ctx, camX, camY);
-      const mx = this.input.aimX - camX;
-      const my = this.input.aimY - camY;
+      const mx = this.clientMouseX;
+      const my = this.clientMouseY;
       ctx.lineCap = "butt";
       for (const pass of [0, 1]) {
         ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.95)";
@@ -5505,6 +5509,8 @@
       const tag = node.tagName.toLowerCase();
       if (SKIP_TAGS2.has(tag)) return;
       if (node.id === "jahdar-root") return;
+      const isSrOnly = !!node.closest?.(".sr-only, .visually-hidden, .primer-sr-only, .screen-reader-text, [hidden]");
+      if (isSrOnly) return;
       if (node.className && typeof node.className === "string") {
         const cls = node.className.toLowerCase();
         if (SKIP_CLASSES2.some((sc) => cls.includes(sc))) return;
@@ -5513,6 +5519,8 @@
       if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse") return;
       const op = parseFloat(cs.opacity || "1");
       if (op < 0.02) return;
+      if (cs.clip && cs.clip.includes("0px")) return;
+      if (cs.clipPath && cs.clipPath.includes("0px")) return;
       let blockId = curBlockId;
       const isButton = tag === "button" || node.getAttribute("role") === "button";
       const isHeading = /^h[1-6]$/.test(tag);
@@ -5827,7 +5835,7 @@
       width: 100%;
       height: 100%;
       display: block;
-      cursor: crosshair;
+      cursor: none;
       z-index: 1;
     }
 

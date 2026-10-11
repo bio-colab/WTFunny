@@ -100,6 +100,8 @@ export class DestroyEngine {
   private site = ''
   private weaponNameT = 0
   private mouseInside = true
+  private clientMouseX = 0
+  private clientMouseY = 0
   private backdropCanvas: HTMLCanvasElement | null = null
 
   cb: EngineCallbacks
@@ -312,6 +314,8 @@ export class DestroyEngine {
   }
 
   onMouseMove(x: number, y: number) {
+    this.clientMouseX = x
+    this.clientMouseY = y
     this.input.aimX = x + this.camX
     this.input.aimY = y + this.camY
     this.mouseInside = true
@@ -625,8 +629,8 @@ export class DestroyEngine {
     world.drawParticles(ctx, camX, camY)
 
     // crosshair (dark outline + white core for visibility on any surface)
-    const mx = this.input.aimX - camX
-    const my = this.input.aimY - camY
+    const mx = this.clientMouseX
+    const my = this.clientMouseY
     ctx.lineCap = 'butt'
     for (const pass of [0, 1]) {
       ctx.strokeStyle = pass === 0 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.95)'
