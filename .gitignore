@@ -9,6 +9,8 @@
 /out/
 /build
 dist/
+!extension/dist/
+!extension/dist/**
 
 # TypeScript & Build Info
 *.tsbuildinfo

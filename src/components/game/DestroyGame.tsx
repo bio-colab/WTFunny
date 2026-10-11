@@ -53,6 +53,7 @@ export default function DestroyGame() {
   const [crtActive, setCrtActive] = useState(false)
   const [cinemaMode, setCinemaMode] = useState(false)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
+  const [extModalOpen, setExtModalOpen] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
@@ -482,6 +483,33 @@ export default function DestroyGame() {
                       </button>
                     </div>
 
+                    {/* Chrome Extension Teaser Button */}
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        type="button"
+                        className="dw-btn full-w"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98))',
+                          border: '1px solid rgba(245, 158, 11, 0.5)',
+                          color: '#fef08a',
+                          padding: '10px 14px',
+                          borderRadius: '12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          cursor: 'pointer',
+                          boxShadow: '0 4px 18px rgba(0,0,0,0.4)',
+                        }}
+                        onClick={() => setExtModalOpen(true)}
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13.5 }}>
+                          🧩 إضافة المتصفح (Chrome Extension)
+                          <span style={{ fontSize: 10, background: '#f59e0b', color: '#090d16', padding: '1px 6px', borderRadius: 6, fontWeight: 800 }}>جديد</span>
+                        </span>
+                        <span style={{ fontSize: 11.5, color: '#38bdf8', fontWeight: 600 }}>دمّر أي موقع حي بلا قيود ⟵</span>
+                      </button>
+                    </div>
+
                     <p className="dw-err" role="alert">{err}</p>
 
                     <div className="dw-keys-row">
@@ -777,6 +805,129 @@ export default function DestroyGame() {
           void startGame(targetUrl)
         }}
       />
+
+      {/* Browser Extension Modal */}
+      {extModalOpen && (
+        <div
+          className="dw-screen dw-overlay"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.85)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => setExtModalOpen(false)}
+        >
+          <div
+            className="dw-win"
+            style={{
+              width: 'min(580px, 100%)',
+              background: '#0f172a',
+              border: '1px solid #f59e0b',
+              borderRadius: 18,
+              boxShadow: '0 12px 48px rgba(0,0,0,0.8)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <div
+              className="dw-win-head"
+              style={{
+                borderBottom: '1px solid #1e293b',
+                padding: '14px 18px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 22 }}>🧩</span>
+                <p style={{ margin: 0, fontWeight: 800, color: '#fef08a', fontSize: 16 }}>
+                  إضافة جَحْدَر للمتصفح (Manifest V3)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExtModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: 20,
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div
+              className="dw-win-body"
+              style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 16 }}
+            >
+              <p style={{ margin: 0, fontSize: 14, color: '#e2e8f0', lineHeight: 1.6 }}>
+                حوّل أي موقع ويب في العالم (حتى المواقع المعقدة مثل <strong style={{ color: '#38bdf8' }}>X، YouTube، Reddit، البريد الإلكتروني، والصفحات المحمية</strong>) إلى ساحة معركة فيزيائية قابلة للتحطيم الفوري عبر متصفحك!
+              </p>
+
+              <div
+                style={{
+                  background: '#1e293b',
+                  borderRadius: 12,
+                  padding: 16,
+                  border: '1px solid #334155',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}
+              >
+                <strong style={{ color: '#f59e0b', fontSize: 13.5 }}>خطوات التثبيت السريعة (دقيقة واحدة):</strong>
+                <ol style={{ margin: 0, paddingRight: 20, fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.85 }}>
+                  <li>
+                    قم ببناء الإضافة عبر الأمر:
+                    <div style={{ margin: '4px 0', background: '#090d16', padding: '6px 12px', borderRadius: 6, color: '#38bdf8', fontFamily: 'monospace' }}>
+                      npm run build:extension
+                    </div>
+                  </li>
+                  <li>
+                    افتح متصفحك (<span style={{ color: '#fef08a' }}>Chrome / Edge / Brave</span>) وتوجه إلى الرابط:
+                    <div style={{ margin: '4px 0', background: '#090d16', padding: '6px 12px', borderRadius: 6, color: '#38bdf8', fontFamily: 'monospace' }}>
+                      chrome://extensions
+                    </div>
+                  </li>
+                  <li>فعّل خيار <strong>وضع المطور (Developer Mode)</strong> في أعلى الزاوية.</li>
+                  <li>
+                    انقر على زر <strong>تحميل حزمة غير مضغوطة (Load unpacked)</strong> ثم اختر مجلد:
+                    <div style={{ margin: '4px 0', background: '#090d16', padding: '6px 12px', borderRadius: 6, color: '#fef08a', fontFamily: 'monospace' }}>
+                      WTFunny/extension
+                    </div>
+                  </li>
+                  <li>
+                    ادخل إلى أي موقع تريده، واضغط:
+                    <span style={{ margin: '0 6px', background: '#f59e0b', color: '#090d16', padding: '2px 8px', borderRadius: 6, fontWeight: 900 }}>
+                      Alt + Shift + J
+                    </span>
+                    أو انقر على أيقونة الإضافة لتبدأ المعركة فوراً!
+                  </li>
+                </ol>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="dw-btn primary"
+                  onClick={() => setExtModalOpen(false)}
+                  style={{ padding: '8px 24px', borderRadius: 10, fontWeight: 700 }}
+                >
+                  حسناً، فهمت!
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

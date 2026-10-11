@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "جَحْدَر — قاهر عمالقة الويب",
+  "short_name": "جَحْدَر",
+  "version": "1.0.0",
+  "description": "حوّل أي صفحة ويب في العالم إلى ساحة معركة فيزيائية قابلة للتحطيم والنسف بالكامل بنظام فوكسل واقعي.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "جَحْدَر — انقر لنسف الصفحة"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "toggle-jahdar": {
+      "suggested_key": {
+        "default": "Alt+Shift+J"
+      },
+      "description": "بدء / إيقاف نسف الموقع الحالي بواسطة جَحْدَر"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*", "dist/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 // Vanilla TS + canvas for performance; talks to React via callbacks.
 
 import { World, CELL, MAT_EMPTY, SKY_ROWS } from './world'
-import { buildLevel, LoadProgress } from './loader'
+import { buildLevel, LoadProgress, LevelData } from './loader'
 import { buildBackgrounds, BgBundle } from './backgrounds'
 import { Player, PHYS, InputState } from './player'
 import { WEAPONS, WeaponDef, WeaponEntities, newWeaponEntities, fireWeapon, throwGrenade, stepEntities, drawEntities, GRENADE, explodeAt, getWeaponIcon, spawnBullet } from './weapons'
@@ -128,13 +128,7 @@ export class DestroyEngine {
 
   async start(opts: StartOptions) {
     this.opts = opts
-    this.done = false
-    this.paused = false
-    this.pctMax = 0
-    this.milestonesPassed.clear()
-    this.es = newWeaponEntities()
     this.site = opts.url === 'demo' ? 'غير قابل للتدمير' : opts.url.replace(/^https?:\/\//, '')
-    sound.ensure()
 
     // 1) fetch html
     this.cb.onProgress('جلب الصفحة…', 0.06)
@@ -155,6 +149,19 @@ export class DestroyEngine {
     const level = await buildLevel(html, opts.url === 'demo' ? 'https://demo.local/' : `https://${opts.url.replace(/^https?:\/\//, '')}`, LAYOUT_W, (m, p) => {
       this.cb.onProgress(m, p)
     })
+
+    await this.startWithLevel(level, this.site, opts.bgTheme)
+  }
+
+  async startWithLevel(level: LevelData, siteTitle: string = 'الموقع الحالي', bgTheme: string = 'grid') {
+    this.done = false
+    this.paused = false
+    this.pctMax = 0
+    this.milestonesPassed.clear()
+    this.es = newWeaponEntities()
+    this.site = siteTitle
+    sound.ensure()
+
     this.backdropCanvas = level.backdropCanvas || null
 
     // 3) init world + player (extra sky rows above the page, like the original)
@@ -169,7 +176,7 @@ export class DestroyEngine {
     } else {
       this.world.loadFromLoader(level.colors, level.owners, level.elements, pageGW, pageGH)
     }
-    this.bg = buildBackgrounds(Math.max(900, this.viewW), Math.max(700, this.viewH), opts.bgTheme)
+    this.bg = buildBackgrounds(Math.max(900, this.viewW), Math.max(700, this.viewH), bgTheme)
 
     // spawn player: topmost surface (page roof) with headroom — like the original
     let spawnX = level.W / 2
