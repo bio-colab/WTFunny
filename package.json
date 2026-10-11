@@ -4,6 +4,11 @@
   "description": "جَحْدَر // JAHDAR — قاهر عمالقة الويب: لعبة تجريبية مفتوحة المصدر لتدمير صفحات الويب فيزيائياً بنظام فوكسل تفاعلي (2D Destructible Web Sandbox)",
   "author": "Jahdar Community",
   "license": "MIT",
+  "homepage": "https://github.com/bio-colab/WTFunny",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bio-colab/WTFunny.git"
+  },
   "keywords": [
     "game",
     "canvas",
