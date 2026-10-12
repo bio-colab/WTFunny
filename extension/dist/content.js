@@ -457,17 +457,28 @@
         };
         this.elements.set(b.id, el);
       }
-      for (let i = 0; i < bodies.length; i++) {
-        const parent = bodies[i];
-        if (parent.kind !== "box") continue;
-        for (let j = 0; j < bodies.length; j++) {
+      for (let j = 0; j < bodies.length; j++) {
+        const child = bodies[j];
+        let bestParent = null;
+        let bestArea = Infinity;
+        for (let i = 0; i < bodies.length; i++) {
           if (i === j) continue;
-          const child = bodies[j];
+          const parent = bodies[i];
+          if (parent.kind !== "box") continue;
+          if (parent.w > W2 * 0.72 || parent.h > 520 || parent.mass > 2400) continue;
+          if (parent.w * parent.h <= child.w * child.h) continue;
           if (child.x >= parent.x - 2 && child.x + child.w <= parent.x + parent.w + 2 && child.y >= parent.y - 2 && child.y + child.h <= parent.y + parent.h + 2) {
-            child.parentId = parent.id;
-            if (!parent.children) parent.children = [];
-            parent.children.push(child.id);
+            const area = parent.w * parent.h;
+            if (area < bestArea) {
+              bestArea = area;
+              bestParent = parent;
+            }
           }
+        }
+        if (bestParent) {
+          child.parentId = bestParent.id;
+          if (!bestParent.children) bestParent.children = [];
+          bestParent.children.push(child.id);
         }
       }
       this.totalMass = Math.max(1, totalM);
@@ -597,15 +608,19 @@
         if (list) {
           for (let i = 0; i < list.length; i++) {
             const b = this.bodies[list[i]];
-            if (b && b.anchored && !b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
-              return true;
+            if (b && b.anchored && !b.destroyed) {
+              if (b.kind === "word" || b.kind === "image") {
+                if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+                  return true;
+                }
+              }
             }
           }
         }
       }
       for (let i = 0; i < this.settledBodies.length; i++) {
         const b = this.settledBodies[i];
-        if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+        if (!b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
           return true;
         }
       }
@@ -615,6 +630,26 @@
         if (cx >= 0 && cx < this.GW && cy >= 0 && cy < this.GH) {
           const m = this.mat[cy * this.GW + cx];
           if (m === MAT_SOLID || m === MAT_BEDROCK) return true;
+        }
+      }
+      return false;
+    }
+    // Check if (wx, wy) is touching the top platform surface of an anchored container box
+    platformAtWorld(wx, wy) {
+      if (wx < 0 || wx >= this.W || wy < 0 || wy >= this.H) return false;
+      const bx = Math.floor(wx / this.BUCKET_SIZE);
+      const by = Math.floor(wy / this.BUCKET_SIZE);
+      if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
+        const list = this.spatialBuckets[by * this.bucketCols + bx];
+        if (list) {
+          for (let i = 0; i < list.length; i++) {
+            const b = this.bodies[list[i]];
+            if (b && b.kind === "box" && b.anchored && !b.destroyed) {
+              if (wx >= b.x && wx <= b.x + b.w && wy >= b.y - 1 && wy <= b.y + 5) {
+                return true;
+              }
+            }
+          }
         }
       }
       return false;
@@ -822,7 +857,18 @@
         if (b.hp <= 0) {
           this.shatterBody(b, wx, wy, imp * falloff);
         } else {
-          this.dislodgeBody(b, dx * imp * falloff, dy * imp * falloff - 120);
+          const blastImpulse = imp * falloff;
+          const isLarge = b.mass > 1200;
+          const hpDislodgeThresh = isLarge ? b.maxHp * 0.45 : b.maxHp * 0.75;
+          const impulseDislodgeThresh = Math.max(90, Math.min(650, Math.sqrt(b.mass) * 14));
+          if (b.anchored && (b.hp <= hpDislodgeThresh || blastImpulse >= impulseDislodgeThresh)) {
+            this.dislodgeBody(b, dx * blastImpulse, dy * blastImpulse - 120);
+          } else if (!b.anchored) {
+            const pushFactor = Math.min(12, 180 / b.mass);
+            b.vx += dx * blastImpulse * pushFactor;
+            b.vy += (dy * blastImpulse - 120) * pushFactor;
+            b.vrot += (Math.random() - 0.5) * 4;
+          }
         }
       }
       if (opts.debris !== false && this.particles.length < 18e3) {
@@ -3387,6 +3433,7 @@
       const feetOffsets = [-6, -3, 0, 3, 6];
       for (const dx of feetOffsets) {
         if (this.solidAt(world, this.x + dx, py + 1)) return true;
+        if (world.platformAtWorld(this.x + dx, py + 1)) return true;
       }
       return false;
     }
@@ -3629,24 +3676,40 @@
         }
       } else {
         this.grounded = false;
-        const headY = this.y - PLAYER_DIMS.height - 1;
-        const hitCenter = this.solidAt(world, this.x, headY);
-        const hitLeft = this.solidAt(world, this.x - 5, headY);
-        const hitRight = this.solidAt(world, this.x + 5, headY);
-        if (hitCenter || hitLeft || hitRight) {
-          if (phys.cornerNudge) {
-            if (!hitCenter && hitLeft && !hitRight) {
+        const subSteps = Math.max(1, Math.ceil(Math.abs(dy) / 3));
+        for (let s = 1; s <= subSteps; s++) {
+          const testY = this.y + dy * s / subSteps;
+          const testHeadY = testY - PLAYER_DIMS.height - 1;
+          const hitCenter = this.solidAt(world, this.x, testHeadY);
+          const hitLeft = this.solidAt(world, this.x - 5, testHeadY);
+          const hitRight = this.solidAt(world, this.x + 5, testHeadY);
+          if (hitCenter || hitLeft || hitRight) {
+            if (phys.cornerNudge && !hitCenter && hitLeft && !hitRight) {
               this.x += 3;
-            } else if (!hitCenter && hitRight && !hitLeft) {
+              this.y = testY;
+            } else if (phys.cornerNudge && !hitCenter && hitRight && !hitLeft) {
               this.x -= 3;
+              this.y = testY;
             } else {
-              this.vy = 30;
-              if (world.solidAtWorld(this.x, headY - 2)) {
-                world.damageCircle(this.x, headY - 2, 5, { debris: true, countAsDestroy: true });
+              this.y = testY - dy / subSteps;
+              this.vy = 20;
+              for (let i = 0; i < 2; i++) {
+                world.spawnParticle({
+                  x: this.x + (Math.random() - 0.5) * 8,
+                  y: testHeadY,
+                  vx: (Math.random() - 0.5) * 60,
+                  vy: 30 + Math.random() * 30,
+                  life: 0.18,
+                  max: 0.18,
+                  kind: "smoke",
+                  color: "#cbd5e1",
+                  size: 2
+                });
               }
+              break;
             }
           } else {
-            this.vy = 30;
+            this.y = testY;
           }
         }
       }
@@ -5426,7 +5489,7 @@
         }
       }
       let clear = true;
-      for (let dy = 1; dy <= 24; dy += 4) {
+      for (let dy = 1; dy <= 42; dy += 4) {
         for (let dx = -12; dx <= 12; dx += 4) {
           if (this.world.solidAtWorld(spawnX + dx, spawnY - dy)) {
             clear = false;
@@ -5435,7 +5498,23 @@
         }
         if (!clear) break;
       }
-      if (!clear) this.world.damageCircle(spawnX, spawnY - 22, 26, { debris: false });
+      if (!clear) {
+        let testY = spawnY;
+        while (testY > skyPx && !clear) {
+          testY -= 8;
+          clear = true;
+          for (let dy = 1; dy <= 42; dy += 4) {
+            for (let dx = -12; dx <= 12; dx += 4) {
+              if (this.world.solidAtWorld(spawnX + dx, testY - dy)) {
+                clear = false;
+                break;
+              }
+            }
+            if (!clear) break;
+          }
+        }
+        spawnY = Math.max(skyPx + 20, testY);
+      }
       this.player = new Player(spawnX, spawnY);
       this.player.weaponIdx = 0;
       this.camX = Math.max(0, Math.min(level.W - this.viewW, spawnX - this.viewW / 2));

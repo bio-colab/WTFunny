@@ -310,23 +310,42 @@ export class World {
     }
 
     // Build parent-child relationships for hierarchical collapsing:
-    // When a container box/card falls, all nested words and images inside it collapse too.
-    for (let i = 0; i < bodies.length; i++) {
-      const parent = bodies[i]
-      if (parent.kind !== 'box') continue
-      for (let j = 0; j < bodies.length; j++) {
+    // Local UI cards/containers collapse their direct nested children when dislodged.
+    // Huge page-level wrappers are excluded so they never cause a site-wide cascade.
+    for (let j = 0; j < bodies.length; j++) {
+      const child = bodies[j]
+      let bestParent: SolidBody | null = null
+      let bestArea = Infinity
+
+      for (let i = 0; i < bodies.length; i++) {
         if (i === j) continue
-        const child = bodies[j]
+        const parent = bodies[i]
+        if (parent.kind !== 'box') continue
+
+        // Skip massive structural page wrappers
+        if (parent.w > W * 0.72 || parent.h > 520 || parent.mass > 2400) continue
+
+        // Parent must be strictly larger than child
+        if (parent.w * parent.h <= child.w * child.h) continue
+
         if (
           child.x >= parent.x - 2 &&
           child.x + child.w <= parent.x + parent.w + 2 &&
           child.y >= parent.y - 2 &&
           child.y + child.h <= parent.y + parent.h + 2
         ) {
-          child.parentId = parent.id
-          if (!parent.children) parent.children = []
-          parent.children.push(child.id)
+          const area = parent.w * parent.h
+          if (area < bestArea) {
+            bestArea = area
+            bestParent = parent
+          }
         }
+      }
+
+      if (bestParent) {
+        child.parentId = bestParent.id
+        if (!bestParent.children) bestParent.children = []
+        bestParent.children.push(child.id)
       }
     }
 
@@ -469,7 +488,7 @@ export class World {
     if (wy < 0) return false
     if (wy >= this.H - 24) return true // Bedrock floor
 
-    // 1) Spatial buckets check (anchored solid bodies)
+    // 1) Spatial buckets check (anchored solid bodies: words & images are solid blocks)
     const bx = Math.floor(wx / this.BUCKET_SIZE)
     const by = Math.floor(wy / this.BUCKET_SIZE)
     if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
@@ -477,17 +496,22 @@ export class World {
       if (list) {
         for (let i = 0; i < list.length; i++) {
           const b = this.bodies[list[i]]
-          if (b && b.anchored && !b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
-            return true
+          if (b && b.anchored && !b.destroyed) {
+            // Words and images are solid physical obstacles (containers are open scenery/platforms)
+            if (b.kind === 'word' || b.kind === 'image') {
+              if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+                return true
+              }
+            }
           }
         }
       }
     }
 
-    // 2) Check settled fallen bodies
+    // 2) Check settled fallen bodies (rubble on the ground)
     for (let i = 0; i < this.settledBodies.length; i++) {
       const b = this.settledBodies[i]
-      if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+      if (!b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
         return true
       }
     }
@@ -502,6 +526,29 @@ export class World {
       }
     }
 
+    return false
+  }
+
+  // Check if (wx, wy) is touching the top platform surface of an anchored container box
+  platformAtWorld(wx: number, wy: number): boolean {
+    if (wx < 0 || wx >= this.W || wy < 0 || wy >= this.H) return false
+
+    const bx = Math.floor(wx / this.BUCKET_SIZE)
+    const by = Math.floor(wy / this.BUCKET_SIZE)
+    if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
+      const list = this.spatialBuckets[by * this.bucketCols + bx]
+      if (list) {
+        for (let i = 0; i < list.length; i++) {
+          const b = this.bodies[list[i]]
+          if (b && b.kind === 'box' && b.anchored && !b.destroyed) {
+            // Top ledge platform: top 5px of the box
+            if (wx >= b.x && wx <= b.x + b.w && wy >= b.y - 1 && wy <= b.y + 5) {
+              return true
+            }
+          }
+        }
+      }
+    }
     return false
   }
 
@@ -759,8 +806,19 @@ export class World {
       if (b.hp <= 0) {
         this.shatterBody(b, wx, wy, imp * falloff)
       } else {
-        // Dislodge and propel
-        this.dislodgeBody(b, dx * imp * falloff, dy * imp * falloff - 120)
+        const blastImpulse = imp * falloff
+        const isLarge = b.mass > 1200
+        const hpDislodgeThresh = isLarge ? b.maxHp * 0.45 : b.maxHp * 0.75
+        const impulseDislodgeThresh = Math.max(90, Math.min(650, Math.sqrt(b.mass) * 14))
+
+        if (b.anchored && (b.hp <= hpDislodgeThresh || blastImpulse >= impulseDislodgeThresh)) {
+          this.dislodgeBody(b, dx * blastImpulse, dy * blastImpulse - 120)
+        } else if (!b.anchored) {
+          const pushFactor = Math.min(12, 180 / b.mass)
+          b.vx += dx * blastImpulse * pushFactor
+          b.vy += (dy * blastImpulse - 120) * pushFactor
+          b.vrot += (Math.random() - 0.5) * 4
+        }
       }
     }
 

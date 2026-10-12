@@ -128,6 +128,7 @@ export class Player {
     const feetOffsets = [-6, -3, 0, 3, 6]
     for (const dx of feetOffsets) {
       if (this.solidAt(world, this.x + dx, py + 1)) return true
+      if (world.platformAtWorld(this.x + dx, py + 1)) return true
     }
     return false
   }
@@ -418,29 +419,47 @@ export class Player {
         }
       }
     } else {
-      // Ascending: check head collision & corner nudge
+      // Ascending: swept check along delta-Y
       this.grounded = false
-      const headY = this.y - PLAYER_DIMS.height - 1
-      const hitCenter = this.solidAt(world, this.x, headY)
-      const hitLeft = this.solidAt(world, this.x - 5, headY)
-      const hitRight = this.solidAt(world, this.x + 5, headY)
+      const subSteps = Math.max(1, Math.ceil(Math.abs(dy) / 3))
 
-      if (hitCenter || hitLeft || hitRight) {
-        // Corner nudge: if only clipping one side, nudge player away from the corner
-        if (phys.cornerNudge) {
-          if (!hitCenter && hitLeft && !hitRight) {
+      for (let s = 1; s <= subSteps; s++) {
+        const testY = this.y + (dy * s) / subSteps
+        const testHeadY = testY - PLAYER_DIMS.height - 1
+        const hitCenter = this.solidAt(world, this.x, testHeadY)
+        const hitLeft = this.solidAt(world, this.x - 5, testHeadY)
+        const hitRight = this.solidAt(world, this.x + 5, testHeadY)
+
+        if (hitCenter || hitLeft || hitRight) {
+          // Corner nudge: if only clipping one side, nudge player away from corner
+          if (phys.cornerNudge && !hitCenter && hitLeft && !hitRight) {
             this.x += 3
-          } else if (!hitCenter && hitRight && !hitLeft) {
+            this.y = testY
+          } else if (phys.cornerNudge && !hitCenter && hitRight && !hitLeft) {
             this.x -= 3
+            this.y = testY
           } else {
-            this.vy = 30
-            // Headbump particle
-            if (world.solidAtWorld(this.x, headY - 2)) {
-              world.damageCircle(this.x, headY - 2, 5, { debris: true, countAsDestroy: true })
+            // Blocked by solid ceiling
+            this.y = testY - dy / subSteps
+            this.vy = 20
+            // Harmless visual dust particles (never trigger damage or dislodge)
+            for (let i = 0; i < 2; i++) {
+              world.spawnParticle({
+                x: this.x + (Math.random() - 0.5) * 8,
+                y: testHeadY,
+                vx: (Math.random() - 0.5) * 60,
+                vy: 30 + Math.random() * 30,
+                life: 0.18,
+                max: 0.18,
+                kind: 'smoke',
+                color: '#cbd5e1',
+                size: 2,
+              })
             }
+            break
           }
         } else {
-          this.vy = 30
+          this.y = testY
         }
       }
     }

@@ -208,9 +208,9 @@ export class DestroyEngine {
         }
       }
     }
-    // ensure spawn area is clear: carve only if needed
+    // Ensure spawn area is clear: if obstructed by solid obstacles, safely raise spawn point into open air
     let clear = true
-    for (let dy = 1; dy <= 24; dy += 4) {
+    for (let dy = 1; dy <= 42; dy += 4) {
       for (let dx = -12; dx <= 12; dx += 4) {
         if (this.world.solidAtWorld(spawnX + dx, spawnY - dy)) {
           clear = false
@@ -219,7 +219,23 @@ export class DestroyEngine {
       }
       if (!clear) break
     }
-    if (!clear) this.world.damageCircle(spawnX, spawnY - 22, 26, { debris: false })
+    if (!clear) {
+      let testY = spawnY
+      while (testY > skyPx && !clear) {
+        testY -= 8
+        clear = true
+        for (let dy = 1; dy <= 42; dy += 4) {
+          for (let dx = -12; dx <= 12; dx += 4) {
+            if (this.world.solidAtWorld(spawnX + dx, testY - dy)) {
+              clear = false
+              break
+            }
+          }
+          if (!clear) break
+        }
+      }
+      spawnY = Math.max(skyPx + 20, testY)
+    }
     this.player = new Player(spawnX, spawnY)
     this.player.weaponIdx = 0
     this.camX = Math.max(0, Math.min(level.W - this.viewW, spawnX - this.viewW / 2))
