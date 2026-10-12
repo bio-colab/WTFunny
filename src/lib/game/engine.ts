@@ -68,6 +68,8 @@ export class DestroyEngine {
   private bg: BgBundle | null = null
   private camX = 0
   private camY = 0
+  private prevCamX = 0
+  private prevCamY = 0
   private shake = 0
   private shakeX = 0
   private shakeY = 0
@@ -295,7 +297,10 @@ export class DestroyEngine {
         break
       }
       case 'q':
-        if (down) this.selectWeapon((this.player?.weaponIdx ?? 0 + 1) % WEAPONS.length)
+        if (down) this.selectWeapon(((this.player?.weaponIdx ?? 0) - 1 + WEAPONS.length) % WEAPONS.length)
+        break
+      case 'e':
+        if (down) this.selectWeapon(((this.player?.weaponIdx ?? 0) + 1) % WEAPONS.length)
         break
       case 'escape':
       case 'p':
@@ -342,6 +347,8 @@ export class DestroyEngine {
   }
 
   onTouchAim(x: number, y: number, down: boolean) {
+    this.clientMouseX = x
+    this.clientMouseY = y
     this.input.aimX = x + this.camX
     this.input.aimY = y + this.camY
     this.input.fire = down
@@ -365,6 +372,8 @@ export class DestroyEngine {
       this.fpsN = 0
     }
 
+    this.prevCamX = this.camX
+    this.prevCamY = this.camY
     this.acc += dt
     const STEP = 1 / 120
     let steps = 0
@@ -388,6 +397,10 @@ export class DestroyEngine {
     const world = this.world
     const p = this.player
     if (!p) return
+
+    // Keep aim synced with camera even when mouse is stationary
+    this.input.aimX = this.clientMouseX + this.camX
+    this.input.aimY = this.clientMouseY + this.camY
 
     // consume one-shot inputs
     const inp: InputState = { ...this.input, jumpPressed: this.input.jumpPressed, altPressed: this.input.altPressed }
@@ -590,8 +603,13 @@ export class DestroyEngine {
     ctx.imageSmoothingEnabled = true
     ctx.imageSmoothingQuality = 'high'
 
-    const camX = this.camX + this.shakeX
-    const camY = this.camY + this.shakeY
+    const STEP = 1 / 120
+    const alpha = Math.max(0, Math.min(1, this.acc / STEP))
+    const renderCamX = this.prevCamX + (this.camX - this.prevCamX) * alpha
+    const renderCamY = this.prevCamY + (this.camY - this.prevCamY) * alpha
+
+    const camX = renderCamX + this.shakeX
+    const camY = renderCamY + this.shakeY
 
     // background parallax
     if (this.bg) this.bg.draw(ctx, camX, camY, this.viewW, this.viewH, world.H)
@@ -618,13 +636,15 @@ export class DestroyEngine {
     // entities below player
     drawEntities(ctx, world, this.es, camX, camY)
 
-    // player
+    // player (smoothly interpolated position)
     const p = this.player
     const curW = WEAPONS[p.weaponIdx]
     const icon = getWeaponIcon(curW.id)
     const spr = WEAPON_ICONS[curW.id]
-    const kx = p.x - camX
-    const ky = p.y - camY
+    const renderPx = p.prevX !== undefined ? p.prevX + (p.x - p.prevX) * alpha : p.x
+    const renderPy = p.prevY !== undefined ? p.prevY + (p.y - p.prevY) * alpha : p.y
+    const kx = renderPx - camX
+    const ky = renderPy - camY
     const charCfg = ConfigManager.get().getConfig().character
 
     const wa = spr?.anchor
@@ -677,11 +697,11 @@ export class DestroyEngine {
       ctx.stroke()
     }
 
-    // muzzle flash
+    // muzzle flash (aligned with interpolated player shoulder position)
     if (p.flashT > 0 && WEAPONS[p.weaponIdx].kind !== 'wand') {
       const fa = p.aim
-      const fx = p.x + Math.cos(fa) * 32 - camX
-      const fy = p.y - 34 + Math.sin(fa) * 32 - camY
+      const fx = renderPx + Math.cos(fa) * 32 - camX
+      const fy = renderPy - 34 + Math.sin(fa) * 32 - camY
       ctx.fillStyle = '#fff3a6'
       ctx.beginPath()
       ctx.arc(fx, fy, 7 + Math.random() * 5, 0, Math.PI * 2)

@@ -114,6 +114,10 @@ export interface SolidBody {
 
   // Visual damage decals: punctures & scorches
   damageDecals: { rx: number; ry: number; r: number }[]
+
+  // Hierarchy
+  parentId?: number
+  children?: number[]
 }
 
 export type Chunk = {
@@ -165,12 +169,11 @@ export class World {
   W = 0
   H = 0
 
-  // Spatial Grid for O(1) Collision:
-  // cell size 4px
-  GRID_CELL = 4
-  gridW = 0
-  gridH = 0
-  spatialGrid!: Int32Array // maps cell -> bodyIndex (-1 = empty, -2 = bedrock)
+  // Spatial Buckets for O(1) Collision & Fast Multi-Body Lookups:
+  BUCKET_SIZE = 32
+  bucketCols = 0
+  bucketRows = 0
+  spatialBuckets: number[][] = []
 
   // Legacy compatibility grid arrays (still kept synchronized for raycasts/HUD):
   mat!: Uint8Array
@@ -210,11 +213,14 @@ export class World {
     this.H = H
     this.GW = Math.ceil(W / CELL)
     this.GH = Math.ceil(H / CELL)
-    this.gridW = Math.ceil(W / this.GRID_CELL)
-    this.gridH = Math.ceil(H / this.GRID_CELL)
+    this.bucketCols = Math.ceil(W / this.BUCKET_SIZE)
+    this.bucketRows = Math.ceil(H / this.BUCKET_SIZE)
 
-    const nGrid = this.gridW * this.gridH
-    this.spatialGrid = new Int32Array(nGrid).fill(-1)
+    const nBuckets = this.bucketCols * this.bucketRows
+    this.spatialBuckets = new Array(nBuckets)
+    for (let i = 0; i < nBuckets; i++) {
+      this.spatialBuckets[i] = []
+    }
 
     const n = this.GW * this.GH
     this.mat = new Uint8Array(n)
@@ -245,19 +251,13 @@ export class World {
     this.totalCells = 1
     this.totalMass = 1
 
-    // Bedrock floor: bottom 28px
+    // Bedrock floor: bottom 28px in legacy mat
     const bedrockY0 = Math.max(0, H - 28)
-    const gy0 = Math.floor(bedrockY0 / this.GRID_CELL)
-    for (let gy = gy0; gy < this.gridH; gy++) {
-      for (let gx = 0; gx < this.gridW; gx++) {
-        this.spatialGrid[gy * this.gridW + gx] = -2 // Bedrock marker
-      }
-    }
-
     const bedCy0 = Math.floor(bedrockY0 / CELL)
     for (let cy = bedCy0; cy < this.GH; cy++) {
+      const row = cy * this.GW
       for (let cx = 0; cx < this.GW; cx++) {
-        this.mat[cy * this.GW + cx] = MAT_BEDROCK
+        this.mat[row + cx] = MAT_BEDROCK
       }
     }
   }
@@ -271,6 +271,11 @@ export class World {
     this.bodies = bodies
     let totalM = 0
 
+    // Clear existing bucket entries
+    for (let i = 0; i < this.spatialBuckets.length; i++) {
+      this.spatialBuckets[i].length = 0
+    }
+
     for (let bIdx = 0; bIdx < bodies.length; bIdx++) {
       const b = bodies[bIdx]
       b.y += skyOffset
@@ -278,8 +283,8 @@ export class World {
       b.id = bIdx
       totalM += b.mass
 
-      // Stamp anchored body into spatialGrid for fast O(1) collision
-      this.stampBodyToGrid(b, bIdx)
+      // Stamp anchored body into spatial buckets for fast O(1) collision
+      this.addBodyToBuckets(b, bIdx)
 
       // Also map to LevelElement for HUD / stats compatibility
       const el: LevelElement = {
@@ -302,6 +307,27 @@ export class World {
         semanticRole: b.semanticRole,
       }
       this.elements.set(b.id, el)
+    }
+
+    // Build parent-child relationships for hierarchical collapsing:
+    // When a container box/card falls, all nested words and images inside it collapse too.
+    for (let i = 0; i < bodies.length; i++) {
+      const parent = bodies[i]
+      if (parent.kind !== 'box') continue
+      for (let j = 0; j < bodies.length; j++) {
+        if (i === j) continue
+        const child = bodies[j]
+        if (
+          child.x >= parent.x - 2 &&
+          child.x + child.w <= parent.x + parent.w + 2 &&
+          child.y >= parent.y - 2 &&
+          child.y + child.h <= parent.y + parent.h + 2
+        ) {
+          child.parentId = parent.id
+          if (!parent.children) parent.children = []
+          parent.children.push(child.id)
+        }
+      }
     }
 
     this.totalMass = Math.max(1, totalM)
@@ -349,88 +375,116 @@ export class World {
     this.dirty = true
   }
 
-  private stampBodyToGrid(b: SolidBody, bIdx: number) {
-    const gx0 = Math.max(0, Math.floor(b.x / this.GRID_CELL))
-    const gy0 = Math.max(0, Math.floor(b.y / this.GRID_CELL))
-    const gx1 = Math.min(this.gridW - 1, Math.floor((b.x + b.w) / this.GRID_CELL))
-    const gy1 = Math.min(this.gridH - 1, Math.floor((b.y + b.h) / this.GRID_CELL))
+  addBodyToBuckets(b: SolidBody, bIdx: number) {
+    const bx0 = Math.max(0, Math.floor(b.x / this.BUCKET_SIZE))
+    const by0 = Math.max(0, Math.floor(b.y / this.BUCKET_SIZE))
+    const bx1 = Math.min(this.bucketCols - 1, Math.floor((b.x + b.w) / this.BUCKET_SIZE))
+    const by1 = Math.min(this.bucketRows - 1, Math.floor((b.y + b.h) / this.BUCKET_SIZE))
 
-    for (let gy = gy0; gy <= gy1; gy++) {
-      const row = gy * this.gridW
-      for (let gx = gx0; gx <= gx1; gx++) {
-        if (this.spatialGrid[row + gx] === -1) {
-          this.spatialGrid[row + gx] = bIdx
-        }
-      }
-    }
-
-    // Mirror to legacy mat
-    const cx0 = Math.max(0, Math.floor(b.x / CELL))
-    const cy0 = Math.max(0, Math.floor(b.y / CELL))
-    const cx1 = Math.min(this.GW - 1, Math.floor((b.x + b.w) / CELL))
-    const cy1 = Math.min(this.GH - 1, Math.floor((b.y + b.h) / CELL))
-    for (let cy = cy0; cy <= cy1; cy++) {
-      const row = cy * this.GW
-      for (let cx = cx0; cx <= cx1; cx++) {
-        if (this.mat[row + cx] === MAT_EMPTY) {
-          this.mat[row + cx] = MAT_SOLID
-          this.owner[row + cx] = b.id
+    for (let by = by0; by <= by1; by++) {
+      const row = by * this.bucketCols
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const list = this.spatialBuckets[row + bx]
+        if (list && !list.includes(bIdx)) {
+          list.push(bIdx)
         }
       }
     }
   }
 
-  private clearBodyFromGrid(b: SolidBody, bIdx: number) {
-    const gx0 = Math.max(0, Math.floor(b.x / this.GRID_CELL))
-    const gy0 = Math.max(0, Math.floor(b.y / this.GRID_CELL))
-    const gx1 = Math.min(this.gridW - 1, Math.floor((b.x + b.w) / this.GRID_CELL))
-    const gy1 = Math.min(this.gridH - 1, Math.floor((b.y + b.h) / this.GRID_CELL))
+  removeBodyFromBuckets(b: SolidBody, bIdx: number) {
+    const bx0 = Math.max(0, Math.floor(b.x / this.BUCKET_SIZE))
+    const by0 = Math.max(0, Math.floor(b.y / this.BUCKET_SIZE))
+    const bx1 = Math.min(this.bucketCols - 1, Math.floor((b.x + b.w) / this.BUCKET_SIZE))
+    const by1 = Math.min(this.bucketRows - 1, Math.floor((b.y + b.h) / this.BUCKET_SIZE))
 
-    for (let gy = gy0; gy <= gy1; gy++) {
-      const row = gy * this.gridW
-      for (let gx = gx0; gx <= gx1; gx++) {
-        if (this.spatialGrid[row + gx] === bIdx) {
-          this.spatialGrid[row + gx] = -1
-        }
-      }
-    }
-
-    const cx0 = Math.max(0, Math.floor(b.x / CELL))
-    const cy0 = Math.max(0, Math.floor(b.y / CELL))
-    const cx1 = Math.min(this.GW - 1, Math.floor((b.x + b.w) / CELL))
-    const cy1 = Math.min(this.GH - 1, Math.floor((b.y + b.h) / CELL))
-    for (let cy = cy0; cy <= cy1; cy++) {
-      const row = cy * this.GW
-      for (let cx = cx0; cx <= cx1; cx++) {
-        if (this.owner[row + cx] === b.id) {
-          this.mat[row + cx] = MAT_EMPTY
-          this.owner[row + cx] = -1
+    for (let by = by0; by <= by1; by++) {
+      const row = by * this.bucketCols
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const list = this.spatialBuckets[row + bx]
+        if (list) {
+          const idx = list.indexOf(bIdx)
+          if (idx >= 0) {
+            list[idx] = list[list.length - 1]
+            list.pop()
+          }
         }
       }
     }
   }
 
-  // --- O(1) Collision Check ---
+  getBodiesInAABB(minX: number, minY: number, maxX: number, maxY: number): SolidBody[] {
+    const bx0 = Math.max(0, Math.floor(minX / this.BUCKET_SIZE))
+    const by0 = Math.max(0, Math.floor(minY / this.BUCKET_SIZE))
+    const bx1 = Math.min(this.bucketCols - 1, Math.floor(maxX / this.BUCKET_SIZE))
+    const by1 = Math.min(this.bucketRows - 1, Math.floor(maxY / this.BUCKET_SIZE))
+
+    const visited = new Set<number>()
+    const result: SolidBody[] = []
+
+    for (let by = by0; by <= by1; by++) {
+      const row = by * this.bucketCols
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const list = this.spatialBuckets[row + bx]
+        if (!list) continue
+        for (let i = 0; i < list.length; i++) {
+          const id = list[i]
+          if (!visited.has(id)) {
+            visited.add(id)
+            const b = this.bodies[id]
+            if (b && !b.destroyed) {
+              result.push(b)
+            }
+          }
+        }
+      }
+    }
+
+    // Also include dynamic & settled bodies overlapping the AABB
+    for (let i = 0; i < this.dynamicBodies.length; i++) {
+      const b = this.dynamicBodies[i]
+      if (!b.destroyed && !visited.has(b.id)) {
+        if (b.x + b.w >= minX && b.x <= maxX && b.y + b.h >= minY && b.y <= maxY) {
+          visited.add(b.id)
+          result.push(b)
+        }
+      }
+    }
+    for (let i = 0; i < this.settledBodies.length; i++) {
+      const b = this.settledBodies[i]
+      if (!b.destroyed && !visited.has(b.id)) {
+        if (b.x + b.w >= minX && b.x <= maxX && b.y + b.h >= minY && b.y <= maxY) {
+          visited.add(b.id)
+          result.push(b)
+        }
+      }
+    }
+
+    return result
+  }
+
+  // --- O(1) Collision Check using Spatial Buckets ---
   solidAtWorld(wx: number, wy: number): boolean {
     if (wx < 0 || wx >= this.W) return true
     if (wy < 0) return false
     if (wy >= this.H - 24) return true // Bedrock floor
 
-    // 1) Spatial grid check (anchored solid bodies)
-    const gx = Math.floor(wx / this.GRID_CELL)
-    const gy = Math.floor(wy / this.GRID_CELL)
-    if (gx >= 0 && gx < this.gridW && gy >= 0 && gy < this.gridH) {
-      const val = this.spatialGrid[gy * this.gridW + gx]
-      if (val === -2) return true // Bedrock
-      if (val >= 0) {
-        const b = this.bodies[val]
-        if (b && b.anchored && !b.destroyed) {
-          return true
+    // 1) Spatial buckets check (anchored solid bodies)
+    const bx = Math.floor(wx / this.BUCKET_SIZE)
+    const by = Math.floor(wy / this.BUCKET_SIZE)
+    if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
+      const list = this.spatialBuckets[by * this.bucketCols + bx]
+      if (list) {
+        for (let i = 0; i < list.length; i++) {
+          const b = this.bodies[list[i]]
+          if (b && b.anchored && !b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+            return true
+          }
         }
       }
     }
 
-    // 2) Check settled fallen bodies (words and cards on the floor)
+    // 2) Check settled fallen bodies
     for (let i = 0; i < this.settledBodies.length; i++) {
       const b = this.settledBodies[i]
       if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
@@ -456,23 +510,43 @@ export class World {
     return Math.min(1, this.destroyedMass / this.totalMass)
   }
 
-  // Find solid body at world coords
+  // Find solid body at world coords (prefers smallest overlapping body, so words inside cards are hit first)
   findBodyAt(wx: number, wy: number): SolidBody | null {
-    const gx = Math.floor(wx / this.GRID_CELL)
-    const gy = Math.floor(wy / this.GRID_CELL)
-    if (gx >= 0 && gx < this.gridW && gy >= 0 && gy < this.gridH) {
-      const idx = this.spatialGrid[gy * this.gridW + gx]
-      if (idx >= 0 && this.bodies[idx] && !this.bodies[idx].destroyed) {
-        return this.bodies[idx]
+    let bestMatch: SolidBody | null = null
+    let bestArea = Infinity
+
+    // 1) Spatial bucket check
+    const bx = Math.floor(wx / this.BUCKET_SIZE)
+    const by = Math.floor(wy / this.BUCKET_SIZE)
+    if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
+      const list = this.spatialBuckets[by * this.bucketCols + bx]
+      if (list) {
+        for (let i = 0; i < list.length; i++) {
+          const b = this.bodies[list[i]]
+          if (b && b.anchored && !b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+            const area = b.w * b.h
+            if (area < bestArea) {
+              bestArea = area
+              bestMatch = b
+            }
+          }
+        }
       }
     }
-    // Check dynamic / settled bodies
-    for (const b of this.dynamicBodies) {
+    if (bestMatch) return bestMatch
+
+    // 2) Check dynamic bodies
+    for (let i = 0; i < this.dynamicBodies.length; i++) {
+      const b = this.dynamicBodies[i]
       if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h && !b.destroyed) return b
     }
-    for (const b of this.settledBodies) {
+
+    // 3) Check settled bodies
+    for (let i = 0; i < this.settledBodies.length; i++) {
+      const b = this.settledBodies[i]
       if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h && !b.destroyed) return b
     }
+
     return null
   }
 
@@ -488,9 +562,13 @@ export class World {
       r: Math.min(8, 2 + dmg * 0.12),
     })
 
-    // Dislodge condition: damage high or anchor broken
-    const dislodgeThresh = b.maxHp * 0.75
-    if (b.anchored && (b.hp <= dislodgeThresh || Math.hypot(impulseX, impulseY) > 80)) {
+    // Guard large anchored bodies from overeager dislodging:
+    const impulseMag = Math.hypot(impulseX, impulseY)
+    const isLarge = b.mass > 1200
+    const hpDislodgeThresh = isLarge ? b.maxHp * 0.45 : b.maxHp * 0.75
+    const impulseDislodgeThresh = Math.max(90, Math.min(650, Math.sqrt(b.mass) * 14))
+
+    if (b.anchored && (b.hp <= hpDislodgeThresh || impulseMag >= impulseDislodgeThresh)) {
       this.dislodgeBody(b, impulseX, impulseY)
     } else if (!b.anchored) {
       const pushFactor = Math.min(12, 180 / b.mass)
@@ -506,11 +584,11 @@ export class World {
     return b
   }
 
-  // Break anchor from layout: body becomes dynamic rigid body
+  // Break anchor from layout: body becomes dynamic rigid body, and collapses children
   dislodgeBody(b: SolidBody, impulseX = 0, impulseY = 0) {
     if (!b.anchored || b.destroyed) return
     b.anchored = false
-    this.clearBodyFromGrid(b, b.id)
+    this.removeBodyFromBuckets(b, b.id)
 
     const pushFactor = Math.min(14, 220 / b.mass)
     b.vx = impulseX * pushFactor + (Math.random() - 0.5) * 80
@@ -531,6 +609,16 @@ export class World {
       el.alive = false
       this.onElementGone?.(el)
     }
+
+    // Cascade dislodge to all nested child bodies:
+    if (b.children && b.children.length > 0) {
+      for (let c = 0; c < b.children.length; c++) {
+        const child = this.bodies[b.children[c]]
+        if (child && child.anchored && !child.destroyed) {
+          this.dislodgeBody(child, impulseX * 0.95, impulseY * 0.95)
+        }
+      }
+    }
   }
 
   // Fracture and shatter a body into vector shards
@@ -540,15 +628,21 @@ export class World {
     b.hp = 0
 
     if (b.anchored) {
-      this.clearBodyFromGrid(b, b.id)
+      this.removeBodyFromBuckets(b, b.id)
       b.anchored = false
     }
 
-    // Remove from dynamic/settled arrays
+    // Remove from dynamic/settled arrays with O(1) swap-and-pop
     const dynIdx = this.dynamicBodies.indexOf(b)
-    if (dynIdx >= 0) this.dynamicBodies.splice(dynIdx, 1)
+    if (dynIdx >= 0) {
+      const last = this.dynamicBodies.pop()!
+      if (dynIdx < this.dynamicBodies.length) this.dynamicBodies[dynIdx] = last
+    }
     const setIdx = this.settledBodies.indexOf(b)
-    if (setIdx >= 0) this.settledBodies.splice(setIdx, 1)
+    if (setIdx >= 0) {
+      const last = this.settledBodies.pop()!
+      if (setIdx < this.settledBodies.length) this.settledBodies[setIdx] = last
+    }
 
     this.destroyedMass += b.mass
     this.destroyedCells += Math.round(b.mass * 2)
@@ -631,46 +725,33 @@ export class World {
     opts: { debris?: boolean; scorch?: boolean; impulse?: number; countAsDestroy?: boolean; full?: boolean } = {}
   ) {
     const imp = opts.impulse ?? 360
-    const hitBodies = new Set<SolidBody>()
+    const hitBodies = this.getBodiesInAABB(wx - r, wy - r, wx + r, wy + r)
 
-    // Check all bodies in radius
-    const minX = wx - r
-    const maxX = wx + r
-    const minY = wy - r
-    const maxY = wy + r
-
-    for (let i = 0; i < this.bodies.length; i++) {
-      const b = this.bodies[i]
+    for (let i = 0; i < hitBodies.length; i++) {
+      const b = hitBodies[i]
       if (b.destroyed) continue
-      // AABB overlap check
-      if (b.x + b.w < minX || b.x > maxX || b.y + b.h < minY || b.y > maxY) continue
 
-      const bcx = b.x + b.w / 2
-      const bcy = b.y + b.h / 2
-      const d = Math.hypot(bcx - wx, bcy - wy)
-      if (d <= r + Math.min(b.w, b.h) / 2) {
-        hitBodies.add(b)
-      }
-    }
+      // Clamped closest distance to body rectangle:
+      const closeX = Math.max(b.x, Math.min(b.x + b.w, wx))
+      const closeY = Math.max(b.y, Math.min(b.y + b.h, wy))
+      const d = Math.hypot(closeX - wx, closeY - wy)
+      if (d > r) continue
 
-    for (const b of hitBodies) {
-      const bcx = b.x + b.w / 2
-      const bcy = b.y + b.h / 2
-      let dx = bcx - wx
-      let dy = bcy - wy
-      const d = Math.hypot(dx, dy) || 1
-      dx /= d
-      dy /= d
+      let dx = (b.x + b.w / 2) - wx
+      let dy = (b.y + b.h / 2) - wy
+      const dirLen = Math.hypot(dx, dy) || 1
+      dx /= dirLen
+      dy /= dirLen
 
-      const falloff = Math.max(0.2, 1 - d / (r * 1.3))
+      const falloff = Math.max(0.2, 1 - d / (r * 1.25))
       const dmg = (opts.full ? 220 : 45 + r * 1.2) * falloff
       b.hp -= dmg
 
       // Add scorch decal
       if (opts.scorch) {
         b.damageDecals.push({
-          rx: Math.max(2, Math.min(b.w - 2, wx - b.x + dx * 6)),
-          ry: Math.max(2, Math.min(b.h - 2, wy - b.y + dy * 6)),
+          rx: Math.max(2, Math.min(b.w - 2, closeX - b.x)),
+          ry: Math.max(2, Math.min(b.h - 2, closeY - b.y)),
           r: Math.min(16, 4 + r * 0.15),
         })
       }
@@ -703,23 +784,22 @@ export class World {
 
   // Knock elements near blast outward
   blastImpulse(wx: number, wy: number, r: number, power: number) {
-    const minX = wx - r
-    const maxX = wx + r
-    const minY = wy - r
-    const maxY = wy + r
+    const hitBodies = this.getBodiesInAABB(wx - r, wy - r, wx + r, wy + r)
 
-    for (let i = 0; i < this.bodies.length; i++) {
-      const b = this.bodies[i]
+    for (let i = 0; i < hitBodies.length; i++) {
+      const b = hitBodies[i]
       if (b.destroyed) continue
-      if (b.x + b.w < minX || b.x > maxX || b.y + b.h < minY || b.y > maxY) continue
 
-      const bcx = b.x + b.w / 2
-      const bcy = b.y + b.h / 2
-      let dx = bcx - wx
-      let dy = bcy - wy
-      const d = Math.hypot(dx, dy) || 1
-      dx /= d
-      dy /= d
+      const closeX = Math.max(b.x, Math.min(b.x + b.w, wx))
+      const closeY = Math.max(b.y, Math.min(b.y + b.h, wy))
+      const d = Math.hypot(closeX - wx, closeY - wy)
+      if (d > r) continue
+
+      let dx = (b.x + b.w / 2) - wx
+      let dy = (b.y + b.h / 2) - wy
+      const dirLen = Math.hypot(dx, dy) || 1
+      dx /= dirLen
+      dy /= dirLen
 
       const falloff = Math.max(0.15, 1 - d / r)
       const applied = power * falloff
@@ -747,12 +827,14 @@ export class World {
   }
 
   igniteWorld(wx: number, wy: number, r: number) {
-    for (const b of this.bodies) {
+    const candidates = this.getBodiesInAABB(wx - r, wy - r, wx + r, wy + r)
+    for (let i = 0; i < candidates.length; i++) {
+      const b = candidates[i]
       if (b.destroyed) continue
-      const bcx = b.x + b.w / 2
-      const bcy = b.y + b.h / 2
-      if (Math.hypot(bcx - wx, bcy - wy) < r + Math.min(b.w, b.h) / 2) {
-        b.burning = 3.5
+      const closeX = Math.max(b.x, Math.min(b.x + b.w, wx))
+      const closeY = Math.max(b.y, Math.min(b.y + b.h, wy))
+      if (Math.hypot(closeX - wx, closeY - wy) <= r) {
+        b.burning = 3.8
       }
     }
   }
@@ -796,19 +878,60 @@ export class World {
   }
 
   step(dt: number) {
-    // 1) Dynamic Bodies Physics (Falling, tumbling, bouncing on bedrock floor)
+    // 1) Process burning for anchored bodies and fire spread
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i]
+      if (b.destroyed || b.burning <= 0) continue
+      b.burning -= dt
+      b.hp -= 28 * dt
+
+      if (Math.random() < 0.25) {
+        this.spawnParticle({
+          x: b.x + Math.random() * b.w,
+          y: b.y + Math.random() * b.h,
+          vx: (Math.random() - 0.5) * 40,
+          vy: -40 - Math.random() * 50,
+          life: 0.45,
+          max: 0.45,
+          kind: 'ember',
+          color: FIRE_COLORS[(Math.random() * FIRE_COLORS.length) | 0],
+          size: 2,
+          grav: -80,
+        })
+      }
+
+      // Fire spread to adjacent bodies in spatial buckets
+      if (Math.random() < 0.05) {
+        const neighbors = this.getBodiesInAABB(b.x - 8, b.y - 8, b.x + b.w + 8, b.y + b.h + 8)
+        for (let n = 0; n < neighbors.length; n++) {
+          const nb = neighbors[n]
+          if (!nb.destroyed && nb.burning <= 0 && nb.id !== b.id) {
+            nb.burning = 3.2
+          }
+        }
+      }
+
+      if (b.hp <= 0) {
+        this.shatterBody(b, b.x + b.w / 2, b.y + b.h / 2, 180)
+      }
+    }
+
+    // 2) Dynamic Bodies Physics (Falling, tumbling, bouncing on settled bodies & floor)
     const floorY = this.H - 24
     for (let i = this.dynamicBodies.length - 1; i >= 0; i--) {
       const b = this.dynamicBodies[i]
       if (b.destroyed) {
-        this.dynamicBodies.splice(i, 1)
+        const last = this.dynamicBodies.pop()!
+        if (i < this.dynamicBodies.length) {
+          this.dynamicBodies[i] = last
+        }
         continue
       }
 
       // Burning
       if (b.burning > 0) {
         b.burning -= dt
-        b.hp -= 24 * dt
+        b.hp -= 28 * dt
         if (Math.random() < 0.25) {
           this.spawnParticle({
             x: b.x + Math.random() * b.w,
@@ -848,9 +971,25 @@ export class World {
           b.vrot *= 0.6
         }
 
-        // Floor collision
-        if (b.y + b.h >= floorY) {
-          b.y = floorY - b.h
+        // Settled-body ground check with ignore list
+        let landSurfaceY = floorY
+        const testBottomY = b.y + b.h
+        for (let sIdx = 0; sIdx < this.settledBodies.length; sIdx++) {
+          const s = this.settledBodies[sIdx]
+          // Ignore list: skip self, parent, or child
+          if (s.id === b.id || s.parentId === b.id || s.id === b.parentId) continue
+          if (b.x + b.w > s.x + 2 && b.x < s.x + s.w - 2) {
+            if (testBottomY >= s.y && testBottomY <= s.y + 16 && b.y < s.y) {
+              if (s.y < landSurfaceY) {
+                landSurfaceY = s.y
+              }
+            }
+          }
+        }
+
+        // Collision with floor or settled body
+        if (b.y + b.h >= landSurfaceY) {
+          b.y = landSurfaceY - b.h
           if (Math.abs(b.vy) > 130) {
             b.vy = -b.vy * 0.32
             b.vx *= 0.65
@@ -863,7 +1002,10 @@ export class World {
               b.vx = 0
               b.vrot = 0
               b.rot = 0
-              this.dynamicBodies.splice(i, 1)
+              const last = this.dynamicBodies.pop()!
+              if (i < this.dynamicBodies.length) {
+                this.dynamicBodies[i] = last
+              }
               this.settledBodies.push(b)
             }
           }
@@ -871,12 +1013,15 @@ export class World {
       }
     }
 
-    // 2) Shards Physics (Fractured glyphs and polygon shards)
+    // 3) Shards Physics (Fractured glyphs and polygon shards)
     for (let i = this.shards.length - 1; i >= 0; i--) {
       const s = this.shards[i]
       s.life -= dt
       if (s.life <= 0) {
-        this.shards.splice(i, 1)
+        const last = this.shards.pop()!
+        if (i < this.shards.length) {
+          this.shards[i] = last
+        }
         continue
       }
 
@@ -887,9 +1032,17 @@ export class World {
         s.y += s.vy * dt
         s.rot += s.vrot * dt
 
-        // Floor bounce
-        if (s.y >= floorY) {
-          s.y = floorY
+        // Floor / settled bounce
+        let shardLandY = floorY
+        for (let sIdx = 0; sIdx < this.settledBodies.length; sIdx++) {
+          const sb = this.settledBodies[sIdx]
+          if (s.x >= sb.x && s.x <= sb.x + sb.w && s.y >= sb.y && s.y <= sb.y + 12) {
+            if (sb.y < shardLandY) shardLandY = sb.y
+          }
+        }
+
+        if (s.y >= shardLandY) {
+          s.y = shardLandY
           if (Math.abs(s.vy) > 140) {
             s.vy = -s.vy * 0.3
             s.vx *= 0.65
@@ -904,12 +1057,15 @@ export class World {
       }
     }
 
-    // 3) Particles
+    // 4) Particles with O(1) swap-and-pop cleanup
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i]
       p.life -= dt
       if (p.life <= 0) {
-        this.particles.splice(i, 1)
+        const last = this.particles.pop()!
+        if (i < this.particles.length) {
+          this.particles[i] = last
+        }
         continue
       }
       if (p.grav) p.vy += p.grav * dt

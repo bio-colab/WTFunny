@@ -347,11 +347,11 @@
       this.GH = 0;
       this.W = 0;
       this.H = 0;
-      // Spatial Grid for O(1) Collision:
-      // cell size 4px
-      this.GRID_CELL = 4;
-      this.gridW = 0;
-      this.gridH = 0;
+      // Spatial Buckets for O(1) Collision & Fast Multi-Body Lookups:
+      this.BUCKET_SIZE = 32;
+      this.bucketCols = 0;
+      this.bucketRows = 0;
+      this.spatialBuckets = [];
       this.dirty = true;
       // Solid Bodies Engine:
       this.bodies = [];
@@ -376,10 +376,13 @@
       this.H = H;
       this.GW = Math.ceil(W2 / CELL);
       this.GH = Math.ceil(H / CELL);
-      this.gridW = Math.ceil(W2 / this.GRID_CELL);
-      this.gridH = Math.ceil(H / this.GRID_CELL);
-      const nGrid = this.gridW * this.gridH;
-      this.spatialGrid = new Int32Array(nGrid).fill(-1);
+      this.bucketCols = Math.ceil(W2 / this.BUCKET_SIZE);
+      this.bucketRows = Math.ceil(H / this.BUCKET_SIZE);
+      const nBuckets = this.bucketCols * this.bucketRows;
+      this.spatialBuckets = new Array(nBuckets);
+      for (let i = 0; i < nBuckets; i++) {
+        this.spatialBuckets[i] = [];
+      }
       const n = this.GW * this.GH;
       this.mat = new Uint8Array(n);
       this.color = new Uint32Array(n);
@@ -408,16 +411,11 @@
       this.totalCells = 1;
       this.totalMass = 1;
       const bedrockY0 = Math.max(0, H - 28);
-      const gy0 = Math.floor(bedrockY0 / this.GRID_CELL);
-      for (let gy = gy0; gy < this.gridH; gy++) {
-        for (let gx = 0; gx < this.gridW; gx++) {
-          this.spatialGrid[gy * this.gridW + gx] = -2;
-        }
-      }
       const bedCy0 = Math.floor(bedrockY0 / CELL);
       for (let cy = bedCy0; cy < this.GH; cy++) {
+        const row = cy * this.GW;
         for (let cx = 0; cx < this.GW; cx++) {
-          this.mat[cy * this.GW + cx] = MAT_BEDROCK;
+          this.mat[row + cx] = MAT_BEDROCK;
         }
       }
     }
@@ -428,13 +426,16 @@
     loadBodies(bodies, W2, H, skyOffset = 0) {
       this.bodies = bodies;
       let totalM = 0;
+      for (let i = 0; i < this.spatialBuckets.length; i++) {
+        this.spatialBuckets[i].length = 0;
+      }
       for (let bIdx = 0; bIdx < bodies.length; bIdx++) {
         const b = bodies[bIdx];
         b.y += skyOffset;
         if (b.baseY !== void 0) b.baseY += skyOffset;
         b.id = bIdx;
         totalM += b.mass;
-        this.stampBodyToGrid(b, bIdx);
+        this.addBodyToBuckets(b, bIdx);
         const el = {
           id: b.id,
           kind: b.kind === "word" ? "glyph" : b.kind,
@@ -455,6 +456,19 @@
           semanticRole: b.semanticRole
         };
         this.elements.set(b.id, el);
+      }
+      for (let i = 0; i < bodies.length; i++) {
+        const parent = bodies[i];
+        if (parent.kind !== "box") continue;
+        for (let j = 0; j < bodies.length; j++) {
+          if (i === j) continue;
+          const child = bodies[j];
+          if (child.x >= parent.x - 2 && child.x + child.w <= parent.x + parent.w + 2 && child.y >= parent.y - 2 && child.y + child.h <= parent.y + parent.h + 2) {
+            child.parentId = parent.id;
+            if (!parent.children) parent.children = [];
+            parent.children.push(child.id);
+          }
+        }
       }
       this.totalMass = Math.max(1, totalM);
       this.totalCells = Math.max(1, totalM);
@@ -493,74 +507,99 @@
       this.totalCells = Math.max(1, elements.size * 100);
       this.dirty = true;
     }
-    stampBodyToGrid(b, bIdx) {
-      const gx0 = Math.max(0, Math.floor(b.x / this.GRID_CELL));
-      const gy0 = Math.max(0, Math.floor(b.y / this.GRID_CELL));
-      const gx1 = Math.min(this.gridW - 1, Math.floor((b.x + b.w) / this.GRID_CELL));
-      const gy1 = Math.min(this.gridH - 1, Math.floor((b.y + b.h) / this.GRID_CELL));
-      for (let gy = gy0; gy <= gy1; gy++) {
-        const row = gy * this.gridW;
-        for (let gx = gx0; gx <= gx1; gx++) {
-          if (this.spatialGrid[row + gx] === -1) {
-            this.spatialGrid[row + gx] = bIdx;
-          }
-        }
-      }
-      const cx0 = Math.max(0, Math.floor(b.x / CELL));
-      const cy0 = Math.max(0, Math.floor(b.y / CELL));
-      const cx1 = Math.min(this.GW - 1, Math.floor((b.x + b.w) / CELL));
-      const cy1 = Math.min(this.GH - 1, Math.floor((b.y + b.h) / CELL));
-      for (let cy = cy0; cy <= cy1; cy++) {
-        const row = cy * this.GW;
-        for (let cx = cx0; cx <= cx1; cx++) {
-          if (this.mat[row + cx] === MAT_EMPTY) {
-            this.mat[row + cx] = MAT_SOLID;
-            this.owner[row + cx] = b.id;
+    addBodyToBuckets(b, bIdx) {
+      const bx0 = Math.max(0, Math.floor(b.x / this.BUCKET_SIZE));
+      const by0 = Math.max(0, Math.floor(b.y / this.BUCKET_SIZE));
+      const bx1 = Math.min(this.bucketCols - 1, Math.floor((b.x + b.w) / this.BUCKET_SIZE));
+      const by1 = Math.min(this.bucketRows - 1, Math.floor((b.y + b.h) / this.BUCKET_SIZE));
+      for (let by = by0; by <= by1; by++) {
+        const row = by * this.bucketCols;
+        for (let bx = bx0; bx <= bx1; bx++) {
+          const list = this.spatialBuckets[row + bx];
+          if (list && !list.includes(bIdx)) {
+            list.push(bIdx);
           }
         }
       }
     }
-    clearBodyFromGrid(b, bIdx) {
-      const gx0 = Math.max(0, Math.floor(b.x / this.GRID_CELL));
-      const gy0 = Math.max(0, Math.floor(b.y / this.GRID_CELL));
-      const gx1 = Math.min(this.gridW - 1, Math.floor((b.x + b.w) / this.GRID_CELL));
-      const gy1 = Math.min(this.gridH - 1, Math.floor((b.y + b.h) / this.GRID_CELL));
-      for (let gy = gy0; gy <= gy1; gy++) {
-        const row = gy * this.gridW;
-        for (let gx = gx0; gx <= gx1; gx++) {
-          if (this.spatialGrid[row + gx] === bIdx) {
-            this.spatialGrid[row + gx] = -1;
-          }
-        }
-      }
-      const cx0 = Math.max(0, Math.floor(b.x / CELL));
-      const cy0 = Math.max(0, Math.floor(b.y / CELL));
-      const cx1 = Math.min(this.GW - 1, Math.floor((b.x + b.w) / CELL));
-      const cy1 = Math.min(this.GH - 1, Math.floor((b.y + b.h) / CELL));
-      for (let cy = cy0; cy <= cy1; cy++) {
-        const row = cy * this.GW;
-        for (let cx = cx0; cx <= cx1; cx++) {
-          if (this.owner[row + cx] === b.id) {
-            this.mat[row + cx] = MAT_EMPTY;
-            this.owner[row + cx] = -1;
+    removeBodyFromBuckets(b, bIdx) {
+      const bx0 = Math.max(0, Math.floor(b.x / this.BUCKET_SIZE));
+      const by0 = Math.max(0, Math.floor(b.y / this.BUCKET_SIZE));
+      const bx1 = Math.min(this.bucketCols - 1, Math.floor((b.x + b.w) / this.BUCKET_SIZE));
+      const by1 = Math.min(this.bucketRows - 1, Math.floor((b.y + b.h) / this.BUCKET_SIZE));
+      for (let by = by0; by <= by1; by++) {
+        const row = by * this.bucketCols;
+        for (let bx = bx0; bx <= bx1; bx++) {
+          const list = this.spatialBuckets[row + bx];
+          if (list) {
+            const idx = list.indexOf(bIdx);
+            if (idx >= 0) {
+              list[idx] = list[list.length - 1];
+              list.pop();
+            }
           }
         }
       }
     }
-    // --- O(1) Collision Check ---
+    getBodiesInAABB(minX, minY, maxX, maxY) {
+      const bx0 = Math.max(0, Math.floor(minX / this.BUCKET_SIZE));
+      const by0 = Math.max(0, Math.floor(minY / this.BUCKET_SIZE));
+      const bx1 = Math.min(this.bucketCols - 1, Math.floor(maxX / this.BUCKET_SIZE));
+      const by1 = Math.min(this.bucketRows - 1, Math.floor(maxY / this.BUCKET_SIZE));
+      const visited = /* @__PURE__ */ new Set();
+      const result = [];
+      for (let by = by0; by <= by1; by++) {
+        const row = by * this.bucketCols;
+        for (let bx = bx0; bx <= bx1; bx++) {
+          const list = this.spatialBuckets[row + bx];
+          if (!list) continue;
+          for (let i = 0; i < list.length; i++) {
+            const id = list[i];
+            if (!visited.has(id)) {
+              visited.add(id);
+              const b = this.bodies[id];
+              if (b && !b.destroyed) {
+                result.push(b);
+              }
+            }
+          }
+        }
+      }
+      for (let i = 0; i < this.dynamicBodies.length; i++) {
+        const b = this.dynamicBodies[i];
+        if (!b.destroyed && !visited.has(b.id)) {
+          if (b.x + b.w >= minX && b.x <= maxX && b.y + b.h >= minY && b.y <= maxY) {
+            visited.add(b.id);
+            result.push(b);
+          }
+        }
+      }
+      for (let i = 0; i < this.settledBodies.length; i++) {
+        const b = this.settledBodies[i];
+        if (!b.destroyed && !visited.has(b.id)) {
+          if (b.x + b.w >= minX && b.x <= maxX && b.y + b.h >= minY && b.y <= maxY) {
+            visited.add(b.id);
+            result.push(b);
+          }
+        }
+      }
+      return result;
+    }
+    // --- O(1) Collision Check using Spatial Buckets ---
     solidAtWorld(wx, wy) {
       if (wx < 0 || wx >= this.W) return true;
       if (wy < 0) return false;
       if (wy >= this.H - 24) return true;
-      const gx = Math.floor(wx / this.GRID_CELL);
-      const gy = Math.floor(wy / this.GRID_CELL);
-      if (gx >= 0 && gx < this.gridW && gy >= 0 && gy < this.gridH) {
-        const val = this.spatialGrid[gy * this.gridW + gx];
-        if (val === -2) return true;
-        if (val >= 0) {
-          const b = this.bodies[val];
-          if (b && b.anchored && !b.destroyed) {
-            return true;
+      const bx = Math.floor(wx / this.BUCKET_SIZE);
+      const by = Math.floor(wy / this.BUCKET_SIZE);
+      if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
+        const list = this.spatialBuckets[by * this.bucketCols + bx];
+        if (list) {
+          for (let i = 0; i < list.length; i++) {
+            const b = this.bodies[list[i]];
+            if (b && b.anchored && !b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+              return true;
+            }
           }
         }
       }
@@ -584,20 +623,34 @@
       if (this.totalMass <= 0) return 0;
       return Math.min(1, this.destroyedMass / this.totalMass);
     }
-    // Find solid body at world coords
+    // Find solid body at world coords (prefers smallest overlapping body, so words inside cards are hit first)
     findBodyAt(wx, wy) {
-      const gx = Math.floor(wx / this.GRID_CELL);
-      const gy = Math.floor(wy / this.GRID_CELL);
-      if (gx >= 0 && gx < this.gridW && gy >= 0 && gy < this.gridH) {
-        const idx = this.spatialGrid[gy * this.gridW + gx];
-        if (idx >= 0 && this.bodies[idx] && !this.bodies[idx].destroyed) {
-          return this.bodies[idx];
+      let bestMatch = null;
+      let bestArea = Infinity;
+      const bx = Math.floor(wx / this.BUCKET_SIZE);
+      const by = Math.floor(wy / this.BUCKET_SIZE);
+      if (bx >= 0 && bx < this.bucketCols && by >= 0 && by < this.bucketRows) {
+        const list = this.spatialBuckets[by * this.bucketCols + bx];
+        if (list) {
+          for (let i = 0; i < list.length; i++) {
+            const b = this.bodies[list[i]];
+            if (b && b.anchored && !b.destroyed && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
+              const area = b.w * b.h;
+              if (area < bestArea) {
+                bestArea = area;
+                bestMatch = b;
+              }
+            }
+          }
         }
       }
-      for (const b of this.dynamicBodies) {
+      if (bestMatch) return bestMatch;
+      for (let i = 0; i < this.dynamicBodies.length; i++) {
+        const b = this.dynamicBodies[i];
         if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h && !b.destroyed) return b;
       }
-      for (const b of this.settledBodies) {
+      for (let i = 0; i < this.settledBodies.length; i++) {
+        const b = this.settledBodies[i];
         if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h && !b.destroyed) return b;
       }
       return null;
@@ -612,8 +665,11 @@
         ry: Math.max(2, Math.min(b.h - 2, wy - b.y)),
         r: Math.min(8, 2 + dmg * 0.12)
       });
-      const dislodgeThresh = b.maxHp * 0.75;
-      if (b.anchored && (b.hp <= dislodgeThresh || Math.hypot(impulseX, impulseY) > 80)) {
+      const impulseMag = Math.hypot(impulseX, impulseY);
+      const isLarge = b.mass > 1200;
+      const hpDislodgeThresh = isLarge ? b.maxHp * 0.45 : b.maxHp * 0.75;
+      const impulseDislodgeThresh = Math.max(90, Math.min(650, Math.sqrt(b.mass) * 14));
+      if (b.anchored && (b.hp <= hpDislodgeThresh || impulseMag >= impulseDislodgeThresh)) {
         this.dislodgeBody(b, impulseX, impulseY);
       } else if (!b.anchored) {
         const pushFactor = Math.min(12, 180 / b.mass);
@@ -626,11 +682,11 @@
       }
       return b;
     }
-    // Break anchor from layout: body becomes dynamic rigid body
+    // Break anchor from layout: body becomes dynamic rigid body, and collapses children
     dislodgeBody(b, impulseX = 0, impulseY = 0) {
       if (!b.anchored || b.destroyed) return;
       b.anchored = false;
-      this.clearBodyFromGrid(b, b.id);
+      this.removeBodyFromBuckets(b, b.id);
       const pushFactor = Math.min(14, 220 / b.mass);
       b.vx = impulseX * pushFactor + (Math.random() - 0.5) * 80;
       b.vy = impulseY * pushFactor - 80 - Math.random() * 120;
@@ -647,6 +703,14 @@
         el.alive = false;
         this.onElementGone?.(el);
       }
+      if (b.children && b.children.length > 0) {
+        for (let c = 0; c < b.children.length; c++) {
+          const child = this.bodies[b.children[c]];
+          if (child && child.anchored && !child.destroyed) {
+            this.dislodgeBody(child, impulseX * 0.95, impulseY * 0.95);
+          }
+        }
+      }
     }
     // Fracture and shatter a body into vector shards
     shatterBody(b, hitX, hitY, force = 380) {
@@ -654,13 +718,19 @@
       b.destroyed = true;
       b.hp = 0;
       if (b.anchored) {
-        this.clearBodyFromGrid(b, b.id);
+        this.removeBodyFromBuckets(b, b.id);
         b.anchored = false;
       }
       const dynIdx = this.dynamicBodies.indexOf(b);
-      if (dynIdx >= 0) this.dynamicBodies.splice(dynIdx, 1);
+      if (dynIdx >= 0) {
+        const last = this.dynamicBodies.pop();
+        if (dynIdx < this.dynamicBodies.length) this.dynamicBodies[dynIdx] = last;
+      }
       const setIdx = this.settledBodies.indexOf(b);
-      if (setIdx >= 0) this.settledBodies.splice(setIdx, 1);
+      if (setIdx >= 0) {
+        const last = this.settledBodies.pop();
+        if (setIdx < this.settledBodies.length) this.settledBodies[setIdx] = last;
+      }
       this.destroyedMass += b.mass;
       this.destroyedCells += Math.round(b.mass * 2);
       if (b.kind === "word") {
@@ -726,37 +796,26 @@
     // Blast circle damage (for rockets, grenades, nukes, and shotgun)
     damageCircle(wx, wy, r, opts = {}) {
       const imp = opts.impulse ?? 360;
-      const hitBodies = /* @__PURE__ */ new Set();
-      const minX = wx - r;
-      const maxX = wx + r;
-      const minY = wy - r;
-      const maxY = wy + r;
-      for (let i = 0; i < this.bodies.length; i++) {
-        const b = this.bodies[i];
+      const hitBodies = this.getBodiesInAABB(wx - r, wy - r, wx + r, wy + r);
+      for (let i = 0; i < hitBodies.length; i++) {
+        const b = hitBodies[i];
         if (b.destroyed) continue;
-        if (b.x + b.w < minX || b.x > maxX || b.y + b.h < minY || b.y > maxY) continue;
-        const bcx = b.x + b.w / 2;
-        const bcy = b.y + b.h / 2;
-        const d = Math.hypot(bcx - wx, bcy - wy);
-        if (d <= r + Math.min(b.w, b.h) / 2) {
-          hitBodies.add(b);
-        }
-      }
-      for (const b of hitBodies) {
-        const bcx = b.x + b.w / 2;
-        const bcy = b.y + b.h / 2;
-        let dx = bcx - wx;
-        let dy = bcy - wy;
-        const d = Math.hypot(dx, dy) || 1;
-        dx /= d;
-        dy /= d;
-        const falloff = Math.max(0.2, 1 - d / (r * 1.3));
+        const closeX = Math.max(b.x, Math.min(b.x + b.w, wx));
+        const closeY = Math.max(b.y, Math.min(b.y + b.h, wy));
+        const d = Math.hypot(closeX - wx, closeY - wy);
+        if (d > r) continue;
+        let dx = b.x + b.w / 2 - wx;
+        let dy = b.y + b.h / 2 - wy;
+        const dirLen = Math.hypot(dx, dy) || 1;
+        dx /= dirLen;
+        dy /= dirLen;
+        const falloff = Math.max(0.2, 1 - d / (r * 1.25));
         const dmg = (opts.full ? 220 : 45 + r * 1.2) * falloff;
         b.hp -= dmg;
         if (opts.scorch) {
           b.damageDecals.push({
-            rx: Math.max(2, Math.min(b.w - 2, wx - b.x + dx * 6)),
-            ry: Math.max(2, Math.min(b.h - 2, wy - b.y + dy * 6)),
+            rx: Math.max(2, Math.min(b.w - 2, closeX - b.x)),
+            ry: Math.max(2, Math.min(b.h - 2, closeY - b.y)),
             r: Math.min(16, 4 + r * 0.15)
           });
         }
@@ -785,21 +844,19 @@
     }
     // Knock elements near blast outward
     blastImpulse(wx, wy, r, power) {
-      const minX = wx - r;
-      const maxX = wx + r;
-      const minY = wy - r;
-      const maxY = wy + r;
-      for (let i = 0; i < this.bodies.length; i++) {
-        const b = this.bodies[i];
+      const hitBodies = this.getBodiesInAABB(wx - r, wy - r, wx + r, wy + r);
+      for (let i = 0; i < hitBodies.length; i++) {
+        const b = hitBodies[i];
         if (b.destroyed) continue;
-        if (b.x + b.w < minX || b.x > maxX || b.y + b.h < minY || b.y > maxY) continue;
-        const bcx = b.x + b.w / 2;
-        const bcy = b.y + b.h / 2;
-        let dx = bcx - wx;
-        let dy = bcy - wy;
-        const d = Math.hypot(dx, dy) || 1;
-        dx /= d;
-        dy /= d;
+        const closeX = Math.max(b.x, Math.min(b.x + b.w, wx));
+        const closeY = Math.max(b.y, Math.min(b.y + b.h, wy));
+        const d = Math.hypot(closeX - wx, closeY - wy);
+        if (d > r) continue;
+        let dx = b.x + b.w / 2 - wx;
+        let dy = b.y + b.h / 2 - wy;
+        const dirLen = Math.hypot(dx, dy) || 1;
+        dx /= dirLen;
+        dy /= dirLen;
         const falloff = Math.max(0.15, 1 - d / r);
         const applied = power * falloff;
         b.hp -= applied * 0.4;
@@ -823,12 +880,14 @@
       this.dirty = true;
     }
     igniteWorld(wx, wy, r) {
-      for (const b of this.bodies) {
+      const candidates = this.getBodiesInAABB(wx - r, wy - r, wx + r, wy + r);
+      for (let i = 0; i < candidates.length; i++) {
+        const b = candidates[i];
         if (b.destroyed) continue;
-        const bcx = b.x + b.w / 2;
-        const bcy = b.y + b.h / 2;
-        if (Math.hypot(bcx - wx, bcy - wy) < r + Math.min(b.w, b.h) / 2) {
-          b.burning = 3.5;
+        const closeX = Math.max(b.x, Math.min(b.x + b.w, wx));
+        const closeY = Math.max(b.y, Math.min(b.y + b.h, wy));
+        if (Math.hypot(closeX - wx, closeY - wy) <= r) {
+          b.burning = 3.8;
         }
       }
     }
@@ -868,16 +927,51 @@
       return { x: cx, y: cy, hit: false };
     }
     step(dt) {
+      for (let i = 0; i < this.bodies.length; i++) {
+        const b = this.bodies[i];
+        if (b.destroyed || b.burning <= 0) continue;
+        b.burning -= dt;
+        b.hp -= 28 * dt;
+        if (Math.random() < 0.25) {
+          this.spawnParticle({
+            x: b.x + Math.random() * b.w,
+            y: b.y + Math.random() * b.h,
+            vx: (Math.random() - 0.5) * 40,
+            vy: -40 - Math.random() * 50,
+            life: 0.45,
+            max: 0.45,
+            kind: "ember",
+            color: FIRE_COLORS[Math.random() * FIRE_COLORS.length | 0],
+            size: 2,
+            grav: -80
+          });
+        }
+        if (Math.random() < 0.05) {
+          const neighbors = this.getBodiesInAABB(b.x - 8, b.y - 8, b.x + b.w + 8, b.y + b.h + 8);
+          for (let n = 0; n < neighbors.length; n++) {
+            const nb = neighbors[n];
+            if (!nb.destroyed && nb.burning <= 0 && nb.id !== b.id) {
+              nb.burning = 3.2;
+            }
+          }
+        }
+        if (b.hp <= 0) {
+          this.shatterBody(b, b.x + b.w / 2, b.y + b.h / 2, 180);
+        }
+      }
       const floorY = this.H - 24;
       for (let i = this.dynamicBodies.length - 1; i >= 0; i--) {
         const b = this.dynamicBodies[i];
         if (b.destroyed) {
-          this.dynamicBodies.splice(i, 1);
+          const last = this.dynamicBodies.pop();
+          if (i < this.dynamicBodies.length) {
+            this.dynamicBodies[i] = last;
+          }
           continue;
         }
         if (b.burning > 0) {
           b.burning -= dt;
-          b.hp -= 24 * dt;
+          b.hp -= 28 * dt;
           if (Math.random() < 0.25) {
             this.spawnParticle({
               x: b.x + Math.random() * b.w,
@@ -913,8 +1007,21 @@
             b.vx = -b.vx * 0.4;
             b.vrot *= 0.6;
           }
-          if (b.y + b.h >= floorY) {
-            b.y = floorY - b.h;
+          let landSurfaceY = floorY;
+          const testBottomY = b.y + b.h;
+          for (let sIdx = 0; sIdx < this.settledBodies.length; sIdx++) {
+            const s = this.settledBodies[sIdx];
+            if (s.id === b.id || s.parentId === b.id || s.id === b.parentId) continue;
+            if (b.x + b.w > s.x + 2 && b.x < s.x + s.w - 2) {
+              if (testBottomY >= s.y && testBottomY <= s.y + 16 && b.y < s.y) {
+                if (s.y < landSurfaceY) {
+                  landSurfaceY = s.y;
+                }
+              }
+            }
+          }
+          if (b.y + b.h >= landSurfaceY) {
+            b.y = landSurfaceY - b.h;
             if (Math.abs(b.vy) > 130) {
               b.vy = -b.vy * 0.32;
               b.vx *= 0.65;
@@ -927,7 +1034,10 @@
                 b.vx = 0;
                 b.vrot = 0;
                 b.rot = 0;
-                this.dynamicBodies.splice(i, 1);
+                const last = this.dynamicBodies.pop();
+                if (i < this.dynamicBodies.length) {
+                  this.dynamicBodies[i] = last;
+                }
                 this.settledBodies.push(b);
               }
             }
@@ -938,7 +1048,10 @@
         const s = this.shards[i];
         s.life -= dt;
         if (s.life <= 0) {
-          this.shards.splice(i, 1);
+          const last = this.shards.pop();
+          if (i < this.shards.length) {
+            this.shards[i] = last;
+          }
           continue;
         }
         if (!s.settled) {
@@ -947,8 +1060,15 @@
           s.x += s.vx * dt;
           s.y += s.vy * dt;
           s.rot += s.vrot * dt;
-          if (s.y >= floorY) {
-            s.y = floorY;
+          let shardLandY = floorY;
+          for (let sIdx = 0; sIdx < this.settledBodies.length; sIdx++) {
+            const sb = this.settledBodies[sIdx];
+            if (s.x >= sb.x && s.x <= sb.x + sb.w && s.y >= sb.y && s.y <= sb.y + 12) {
+              if (sb.y < shardLandY) shardLandY = sb.y;
+            }
+          }
+          if (s.y >= shardLandY) {
+            s.y = shardLandY;
             if (Math.abs(s.vy) > 140) {
               s.vy = -s.vy * 0.3;
               s.vx *= 0.65;
@@ -966,7 +1086,10 @@
         const p = this.particles[i];
         p.life -= dt;
         if (p.life <= 0) {
-          this.particles.splice(i, 1);
+          const last = this.particles.pop();
+          if (i < this.particles.length) {
+            this.particles[i] = last;
+          }
           continue;
         }
         if (p.grav) p.vy += p.grav * dt;
@@ -3218,6 +3341,8 @@
       this.tumble = 0;
       this.tumbleV = 0;
       this.spawnProtect = 0;
+      this.jetFuel = 1;
+      this.maxJetFuel = 1;
       this.weaponIdx = 0;
       this.cooldown = 0;
       this.switchT = 1;
@@ -3231,6 +3356,8 @@
       this.throwT = -1;
       this.x = x;
       this.y = y;
+      this.prevX = x;
+      this.prevY = y;
     }
     get phys() {
       return ConfigManager.get().getConfig().physics;
@@ -3241,6 +3368,9 @@
     respawnAt(x, y) {
       this.x = x;
       this.y = y;
+      this.prevX = x;
+      this.prevY = y;
+      this.jetFuel = 1;
       this.vx = 0;
       this.vy = 0;
       this.tumble = 0;
@@ -3273,7 +3403,12 @@
       return false;
     }
     step(world, input, dt) {
+      this.prevX = this.x;
+      this.prevY = this.y;
       const phys = this.phys;
+      if (this.grounded) {
+        this.jetFuel = Math.min(this.maxJetFuel, this.jetFuel + dt * 2.2);
+      }
       if (this.dropT > 0) this.dropT -= dt;
       if (this.spawnProtect > 0) this.spawnProtect -= dt;
       const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -3379,10 +3514,11 @@
       if (!input.jump && this.vy < -200) {
         this.vy += phys.gravity * (1 - phys.variableJumpCut) * 2.2 * dt;
       }
-      const jetAllowed = input.jump && !this.grounded && this.buffer <= 0 && this.coyote <= 0 && this.dropT <= 0;
+      const jetAllowed = input.jump && !this.grounded && this.buffer <= 0 && this.coyote <= 0 && this.dropT <= 0 && this.jetFuel > 0.04;
       if (jetAllowed) {
         this.jetOn = true;
         this.jetK = Math.min(1, this.jetK + dt * 6);
+        this.jetFuel = Math.max(0, this.jetFuel - dt * 0.42);
         this.vy -= phys.jetThrust * dt;
         if (this.vy < -phys.jetMaxRise) {
           this.vy = -phys.jetMaxRise;
@@ -3433,9 +3569,21 @@
         if (this.vy > maxFall) this.vy = maxFall;
       }
       const oldGrounded = this.grounded;
-      this.y += this.vy * dt;
+      const dy = this.vy * dt;
       if (this.vy >= 0) {
-        if (this.dropT <= 0 && this.isGroundedAt(world, this.y)) {
+        const subSteps = Math.max(1, Math.ceil(Math.abs(dy) / 3));
+        let landed = false;
+        let landY = this.y;
+        for (let s = 1; s <= subSteps; s++) {
+          const testY = this.y + dy * s / subSteps;
+          if (this.dropT <= 0 && this.isGroundedAt(world, testY)) {
+            landed = true;
+            landY = testY;
+            break;
+          }
+        }
+        if (landed) {
+          this.y = landY;
           let maxStep = 12;
           while (this.isGroundedAt(world, this.y - 1) && maxStep > 0 && this.y > 0) {
             this.y -= 1;
@@ -3462,6 +3610,7 @@
           this.flips = 1;
           this.jetOn = false;
         } else {
+          this.y += dy;
           let snapped = false;
           if (oldGrounded && this.dropT <= 0 && this.buffer <= 0 && !input.jump && this.vy < 280) {
             for (let snap = 1; snap <= 6; snap++) {
@@ -3521,6 +3670,29 @@
           }
           if (!stepped) {
             this.vx = 0;
+          }
+        }
+      }
+      const feetStuck = this.solidAt(world, this.x, this.y - 2);
+      const midStuck = this.solidAt(world, this.x, this.y - 18);
+      if (feetStuck && midStuck) {
+        let unstuck = false;
+        for (let up = 1; up <= 24; up++) {
+          if (!this.solidAt(world, this.x, this.y - up - 18) && !this.solidAt(world, this.x, this.y - up - 2)) {
+            this.y -= up;
+            unstuck = true;
+            break;
+          }
+        }
+        if (!unstuck) {
+          for (let side = 2; side <= 16; side += 2) {
+            if (!this.solidAt(world, this.x - side, this.y - 18)) {
+              this.x -= side;
+              break;
+            } else if (!this.solidAt(world, this.x + side, this.y - 18)) {
+              this.x += side;
+              break;
+            }
           }
         }
       }
@@ -4477,11 +4649,13 @@
       const b = es.bullets[i];
       b.life -= dt;
       if (b.life <= 0) {
-        es.bullets.splice(i, 1);
+        const last = es.bullets.pop();
+        if (i < es.bullets.length) es.bullets[i] = last;
         continue;
       }
       const steps = Math.max(1, Math.ceil(Math.hypot(b.vx, b.vy) * dt / (CELL * 1.2)));
       let dead = false;
+      let lastHitBodyId = -1;
       for (let s = 0; s < steps && !dead; s++) {
         b.x += b.vx * dt / steps;
         b.y += b.vy * dt / steps;
@@ -4491,25 +4665,31 @@
         }
         if (b.y < 0) continue;
         if (b.x >= 0 && b.y >= 0 && b.x < world.W && b.y < world.H && world.solidAtWorld(b.x, b.y)) {
-          world.hitBodyAt(b.x, b.y, b.dmg, b.vx * 0.04, b.vy * 0.04);
-          if (Math.random() < 0.8) {
-            world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true });
-          }
-          const pan = Math.max(-1, Math.min(1, b.x / world.W * 2 - 1));
-          sound.hit(Math.random() < 0.5 ? "paper" : "block", 0.8, pan);
-          for (let k = 0; k < 3; k++) {
-            world.spawnParticle({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300, life: 0.2, max: 0.2, kind: "spark", color: "#ffd23d", size: 2 });
-          }
-          b.pierce--;
-          if (b.pierce <= 0) dead = true;
-          else {
-            b.vx *= 0.82;
-            b.vy *= 0.82;
+          const bodyHit = world.findBodyAt(b.x, b.y);
+          if (!bodyHit || bodyHit.id !== lastHitBodyId) {
+            if (bodyHit) lastHitBodyId = bodyHit.id;
+            world.hitBodyAt(b.x, b.y, b.dmg, b.vx * 0.04, b.vy * 0.04);
+            if (Math.random() < 0.8) {
+              world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true });
+            }
+            const pan = Math.max(-1, Math.min(1, b.x / world.W * 2 - 1));
+            sound.hit(Math.random() < 0.5 ? "paper" : "block", 0.8, pan);
+            for (let k = 0; k < 3; k++) {
+              world.spawnParticle({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300, life: 0.2, max: 0.2, kind: "spark", color: "#ffd23d", size: 2 });
+            }
+            b.pierce--;
+            if (b.pierce <= 0) dead = true;
+            else {
+              b.vx *= 0.82;
+              b.vy *= 0.82;
+            }
           }
         }
       }
-      if (dead) es.bullets.splice(i, 1);
-      else if (Math.random() < 0.35) {
+      if (dead) {
+        const last = es.bullets.pop();
+        if (i < es.bullets.length) es.bullets[i] = last;
+      } else if (Math.random() < 0.35) {
         world.spawnParticle({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.1, max: 0.1, kind: "spark", color: b.color, size: 2 });
       }
     }
@@ -4521,15 +4701,29 @@
         r.vy += (r.bomblets > 0 ? 320 : 60) * dt;
         const stepX = r.vx * dt;
         const stepY = r.vy * dt;
-        r.x += stepX;
-        r.y += stepY;
-        r.distTraveled = (r.distTraveled ?? 0) + Math.hypot(stepX, stepY);
+        const stepDist = Math.hypot(stepX, stepY);
+        r.distTraveled = (r.distTraveled ?? 0) + stepDist;
         if (r.smokeT <= 0) {
           r.smokeT = 0.03;
           world.spawnParticle({ x: r.x, y: r.y + 4, vx: (Math.random() - 0.5) * 40, vy: 60 + Math.random() * 60, life: 0.5, max: 0.5, kind: "smoke", color: "#5b5566", size: 3 + Math.random() * 3 });
           world.spawnParticle({ x: r.x, y: r.y + 4, vx: 0, vy: 40, life: 0.12, max: 0.12, kind: "spark", color: "#ffd23d", size: 3 });
         }
-        const hitWorld = r.x < 0 || r.x > world.W || r.y >= 0 && r.y < world.H && world.mat[world.idx(Math.floor(r.x / CELL), Math.floor(r.y / CELL))] !== 0;
+        const sweepSteps = Math.max(1, Math.ceil(stepDist / 4));
+        let hitWorld = false;
+        let hitX = r.x + stepX;
+        let hitY = r.y + stepY;
+        for (let s = 1; s <= sweepSteps; s++) {
+          const testX = r.x + stepX * s / sweepSteps;
+          const testY = r.y + stepY * s / sweepSteps;
+          if (testX < 0 || testX > world.W || testY > world.H || testY >= 0 && world.solidAtWorld(testX, testY)) {
+            hitWorld = true;
+            hitX = testX;
+            hitY = testY;
+            break;
+          }
+        }
+        r.x = hitX;
+        r.y = hitY;
         const targetReached = r.targetDist !== void 0 && r.distTraveled >= r.targetDist;
         if (hitWorld || targetReached || r.y > world.H) {
           if (r.bomblets > 0) {
@@ -4551,32 +4745,52 @@
               });
             }
             sound.chutePop(0);
-            es.rockets.splice(i, 1);
+            const last2 = es.rockets.pop();
+            if (i < es.rockets.length) es.rockets[i] = last2;
             continue;
           }
           const detX = targetReached && !hitWorld && r.targetX !== void 0 ? r.targetX : r.x;
           const detY = targetReached && !hitWorld && r.targetY !== void 0 ? r.targetY : r.y;
           explodeAt(world, es, detX, detY, ROCKET_BLAST, { scorch: true });
-          es.rockets.splice(i, 1);
+          const last = es.rockets.pop();
+          if (i < es.rockets.length) es.rockets[i] = last;
           continue;
         }
         if (r.life <= 0) {
           explodeAt(world, es, r.x, r.y, ROCKET_BLAST);
-          es.rockets.splice(i, 1);
+          const last = es.rockets.pop();
+          if (i < es.rockets.length) es.rockets[i] = last;
         }
       } else {
         r.vy += (240 - r.vy) * 2.4 * dt;
         r.vx *= 1 - 0.9 * dt;
-        r.x += r.vx * dt;
-        r.y += r.vy * dt;
+        const bStepX = r.vx * dt;
+        const bStepY = r.vy * dt;
+        const bDist = Math.hypot(bStepX, bStepY);
+        const bSweepSteps = Math.max(1, Math.ceil(bDist / 3));
+        let bHitWorld = false;
+        for (let s = 1; s <= bSweepSteps; s++) {
+          const testX = r.x + bStepX * s / bSweepSteps;
+          const testY = r.y + bStepY * s / bSweepSteps;
+          if (testX < 0 || testX > world.W || testY > world.H || testY >= 0 && world.solidAtWorld(testX, testY)) {
+            bHitWorld = true;
+            r.x = testX;
+            r.y = testY;
+            break;
+          }
+        }
+        if (!bHitWorld) {
+          r.x += bStepX;
+          r.y += bStepY;
+        }
         r.fuse -= dt;
         if (Math.random() < 0.1) {
           world.spawnParticle({ x: r.x, y: r.y - 10, vx: 0, vy: 0, life: 0.2, max: 0.2, kind: "spark", color: "#ffffff", size: 2 });
         }
-        const hitWorld = r.x < 0 || r.x > world.W || r.y >= 0 && r.y < world.H && world.mat[world.idx(Math.floor(r.x / CELL), Math.floor(r.y / CELL))] !== 0;
-        if (hitWorld && r.vy > 0 || r.y > world.H || r.fuse <= 0) {
+        if (bHitWorld && r.vy > 0 || r.y > world.H || r.fuse <= 0) {
           explodeAt(world, es, r.x, r.y, BOMBLET_BLAST, { scorch: true });
-          es.rockets.splice(i, 1);
+          const last = es.rockets.pop();
+          if (i < es.rockets.length) es.rockets[i] = last;
         }
       }
     }
@@ -4587,27 +4801,35 @@
       g.x += g.vx * dt;
       g.y += g.vy * dt;
       g.rot += g.vrot * dt;
-      if (world.solidAtWorld(g.x, g.y + 6)) {
+      if (g.vy > 0 && world.solidAtWorld(g.x, g.y + 6)) {
         g.y -= 2;
         g.vy = -Math.abs(g.vy) * 0.45;
         g.vx *= 0.75;
         g.vrot *= 0.7;
         if (Math.abs(g.vy) > 90) sound.hit("block", 0.5, 0);
+      } else if (g.vy < 0 && world.solidAtWorld(g.x, g.y - 6)) {
+        g.y += 2;
+        g.vy = Math.abs(g.vy) * 0.45;
       }
-      if (world.solidAtWorld(g.x + Math.sign(g.vx) * 6, g.y)) {
-        g.vx *= -0.5;
+      const sideDir = Math.sign(g.vx);
+      if (sideDir !== 0 && world.solidAtWorld(g.x + sideDir * 6, g.y)) {
+        g.x -= sideDir * 3;
+        g.vx = -g.vx * 0.5;
+        g.vrot *= 0.7;
       }
       const nearTarget = g.targetX !== void 0 && g.targetY !== void 0 && Math.hypot(g.x - g.targetX, g.y - g.targetY) < 24 && g.fuse < 0.6;
       if (g.fuse <= 0 || nearTarget) {
         explodeAt(world, es, g.x, g.y, GRENADE.radius, { scorch: true });
-        es.grenades.splice(i, 1);
+        const last = es.grenades.pop();
+        if (i < es.grenades.length) es.grenades[i] = last;
       }
     }
     for (let i = es.flames.length - 1; i >= 0; i--) {
       const f = es.flames[i];
       f.life -= dt;
       if (f.life <= 0) {
-        es.flames.splice(i, 1);
+        const last = es.flames.pop();
+        if (i < es.flames.length) es.flames[i] = last;
         continue;
       }
       f.vx *= 1 - 2.6 * dt;
@@ -4615,17 +4837,18 @@
       f.x += f.vx * dt;
       f.y += f.vy * dt;
       if (f.x < 0 || f.x > world.W || f.y > world.H) {
-        es.flames.splice(i, 1);
+        const last = es.flames.pop();
+        if (i < es.flames.length) es.flames[i] = last;
         continue;
       }
       if (f.y >= 0) {
-        const gi = world.idx(Math.floor(f.x / CELL), Math.floor(f.y / CELL));
-        if (world.mat[gi] !== 0) {
+        if (world.solidAtWorld(f.x, f.y)) {
           world.igniteWorld(f.x, f.y, 9);
           for (let k = 0; k < 2; k++) {
             world.spawnParticle({ x: f.x, y: f.y, vx: (Math.random() - 0.5) * 90, vy: -60 - Math.random() * 90, life: 0.3, max: 0.3, kind: "ember", color: ["#ffd23d", "#ff8a2a"][Math.random() * 2 | 0], size: 2.5 });
           }
-          es.flames.splice(i, 1);
+          const last = es.flames.pop();
+          if (i < es.flames.length) es.flames[i] = last;
         }
       }
     }
@@ -4671,7 +4894,7 @@
         d.vy += 4e3 * dt;
         d.y += d.vy * dt;
         d.x += d.vx * dt;
-        const hitWorld = d.y >= world.H || d.y >= 0 && world.mat[world.idx(Math.max(0, Math.min(world.GW - 1, Math.floor(d.x / CELL))), Math.max(0, Math.min(world.GH - 1, Math.floor(d.y / CELL))))] !== 0;
+        const hitWorld = d.y >= world.H || d.y >= 0 && world.solidAtWorld(d.x, d.y);
         if (hitWorld) {
           explodeAt(world, es, d.x, d.y, 26, { scorch: true });
           d.state = 2;
@@ -4693,7 +4916,7 @@
         st.y += st.vy * dt;
         if (st.y < 0) st.y = 0;
         st.distTraveled = (st.distTraveled ?? 0) + stepDist;
-        const hitDense = st.x >= 0 && st.x < world.W && st.y >= 0 && st.y < world.H && world.mat[world.idx(Math.floor(st.x / CELL), Math.floor(st.y / CELL))] !== 0;
+        const hitDense = st.x >= 0 && st.x < world.W && st.y >= 0 && st.y < world.H && world.solidAtWorld(st.x, st.y);
         const reachedTarget = st.targetDist !== void 0 && st.distTraveled >= st.targetDist;
         if (reachedTarget || hitDense) {
           st.anchored = true;
@@ -4707,51 +4930,64 @@
         }
       }
       st.r = Math.min(st.maxR, 30 + st.t * 110);
-      const cx = Math.floor(st.x / CELL);
-      const cy = Math.floor(st.y / CELL);
-      const rc = Math.ceil(st.r / CELL);
-      const suckRate = 1;
-      for (let k = 0; k < 160 * suckRate; k++) {
-        const a = Math.random() * Math.PI * 2;
-        const rr2 = st.r * (0.15 + Math.random() * 0.85);
-        const xx = cx + Math.cos(a) * (rr2 / CELL);
-        const yy = cy + Math.sin(a) * (rr2 / CELL);
-        if (xx < 0 || yy < 0 || xx >= world.GW || yy >= world.GH) continue;
-        const gi = world.idx(xx | 0, yy | 0);
-        if (world.mat[gi] === 1) {
-          world.mat[gi] = 0;
-          world.pixBuf[gi] = 0;
-          world.destroyedCells++;
-          world.dirty = true;
-          const own = world.owner[gi];
-          if (own >= 0) {
-            const el = world.elements.get(own);
-            if (el && el.alive) {
-              el.lost++;
-              if (el.kind === "glyph" && el.lost / Math.max(1, el.cells.length) > 0.25) world.popElement(el, st.x, st.y, 300);
-              else if (el.kind !== "glyph" && el.lost / Math.max(1, el.cells.length) > 0.55) world.popElement(el, st.x, st.y, 300);
-            }
-          }
-          world.owner[gi] = -1;
-          const wx = (xx | 0) * CELL;
-          const wy = (yy | 0) * CELL;
-          if (Math.random() < 0.3) {
-            const dx = st.x - wx;
-            const dy = st.y - wy;
-            const dd = Math.hypot(dx, dy) || 1;
-            world.spawnParticle({
-              x: wx,
-              y: wy,
-              vx: dx / dd * 300 + -dy / dd * 220,
-              vy: dy / dd * 300 + dx / dd * 220,
-              life: 0.5,
-              max: 0.5,
-              kind: "spark",
-              color: ["#ffffff", "#7ff3ff", "#c05ae0", "#ffd23d"][Math.random() * 4 | 0],
-              size: 2.5
-            });
+      for (let bi = 0; bi < world.dynamicBodies.length; bi++) {
+        const b = world.dynamicBodies[bi];
+        if (b.destroyed) continue;
+        const bcx = b.x + b.w / 2;
+        const bcy = b.y + b.h / 2;
+        const dx = st.x - bcx;
+        const dy = st.y - bcy;
+        const dist = Math.hypot(dx, dy);
+        if (dist < st.r * 2.4) {
+          const pull = Math.min(2200, 38e4 / Math.max(30, dist)) * (dt * 1.5);
+          const ndx = dx / (dist || 1);
+          const ndy = dy / (dist || 1);
+          b.vx += ndx * pull;
+          b.vy += ndy * pull;
+          b.vrot += 6 * dt;
+          if (dist < st.r * 0.45) {
+            world.shatterBody(b, st.x, st.y, 450);
           }
         }
+      }
+      for (let si = 0; si < world.shards.length; si++) {
+        const s = world.shards[si];
+        const dx = st.x - s.x;
+        const dy = st.y - s.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < st.r * 2.6) {
+          const pull = 1800 * dt;
+          s.vx += dx / (dist || 1) * pull;
+          s.vy += dy / (dist || 1) * pull;
+          if (dist < st.r * 0.35) {
+            s.life = 0;
+          }
+        }
+      }
+      if (Math.random() < 0.25) {
+        world.damageCircle(st.x, st.y, st.r * 0.85, { debris: false, countAsDestroy: true, impulse: 360 });
+      }
+      const cx = st.x;
+      const cy = st.y;
+      for (let k = 0; k < 4; k++) {
+        const a = Math.random() * Math.PI * 2;
+        const rr2 = st.r * (0.2 + Math.random() * 0.8);
+        const wx = cx + Math.cos(a) * rr2;
+        const wy = cy + Math.sin(a) * rr2;
+        const dx = st.x - wx;
+        const dy = st.y - wy;
+        const dd = Math.hypot(dx, dy) || 1;
+        world.spawnParticle({
+          x: wx,
+          y: wy,
+          vx: dx / dd * 300 + -dy / dd * 220,
+          vy: dy / dd * 300 + dx / dd * 220,
+          life: 0.35,
+          max: 0.35,
+          kind: "spark",
+          color: ["#ffffff", "#7ff3ff", "#c05ae0", "#ffd23d"][Math.random() * 4 | 0],
+          size: 2.5
+        });
       }
       if (Math.random() < 0.85) {
         for (const ja of [st.rot, st.rot + Math.PI]) {
@@ -5069,6 +5305,8 @@
       this.bg = null;
       this.camX = 0;
       this.camY = 0;
+      this.prevCamX = 0;
+      this.prevCamY = 0;
       this.shake = 0;
       this.shakeX = 0;
       this.shakeY = 0;
@@ -5270,7 +5508,10 @@
           break;
         }
         case "q":
-          if (down) this.selectWeapon((this.player?.weaponIdx ?? 0 + 1) % WEAPONS.length);
+          if (down) this.selectWeapon(((this.player?.weaponIdx ?? 0) - 1 + WEAPONS.length) % WEAPONS.length);
+          break;
+        case "e":
+          if (down) this.selectWeapon(((this.player?.weaponIdx ?? 0) + 1) % WEAPONS.length);
           break;
         case "escape":
         case "p":
@@ -5311,6 +5552,8 @@
       this.selectWeapon((this.player.weaponIdx + dir + WEAPONS.length) % WEAPONS.length);
     }
     onTouchAim(x, y, down) {
+      this.clientMouseX = x;
+      this.clientMouseY = y;
       this.input.aimX = x + this.camX;
       this.input.aimY = y + this.camY;
       this.input.fire = down;
@@ -5331,6 +5574,8 @@
         this.fpsAcc = 0;
         this.fpsN = 0;
       }
+      this.prevCamX = this.camX;
+      this.prevCamY = this.camY;
       this.acc += dt;
       const STEP = 1 / 120;
       let steps = 0;
@@ -5351,6 +5596,8 @@
       const world = this.world;
       const p = this.player;
       if (!p) return;
+      this.input.aimX = this.clientMouseX + this.camX;
+      this.input.aimY = this.clientMouseY + this.camY;
       const inp = { ...this.input, jumpPressed: this.input.jumpPressed, altPressed: this.input.altPressed };
       this.input.jumpPressed = false;
       this.input.altPressed = false;
@@ -5520,8 +5767,12 @@
       ctx.scale(this.dpr, this.dpr);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
-      const camX = this.camX + this.shakeX;
-      const camY = this.camY + this.shakeY;
+      const STEP = 1 / 120;
+      const alpha = Math.max(0, Math.min(1, this.acc / STEP));
+      const renderCamX = this.prevCamX + (this.camX - this.prevCamX) * alpha;
+      const renderCamY = this.prevCamY + (this.camY - this.prevCamY) * alpha;
+      const camX = renderCamX + this.shakeX;
+      const camY = renderCamY + this.shakeY;
       if (this.bg) this.bg.draw(ctx, camX, camY, this.viewW, this.viewH, world.H);
       else {
         ctx.fillStyle = "#000000";
@@ -5543,8 +5794,10 @@
       const curW = WEAPONS[p.weaponIdx];
       const icon = getWeaponIcon(curW.id);
       const spr = WEAPON_ICONS[curW.id];
-      const kx = p.x - camX;
-      const ky = p.y - camY;
+      const renderPx = p.prevX !== void 0 ? p.prevX + (p.x - p.prevX) * alpha : p.x;
+      const renderPy = p.prevY !== void 0 ? p.prevY + (p.y - p.prevY) * alpha : p.y;
+      const kx = renderPx - camX;
+      const ky = renderPy - camY;
       const charCfg = ConfigManager.get().getConfig().character;
       const wa = spr?.anchor ? { dx: spr.anchor.x * 2, dy: spr.anchor.y * 2 } : icon ? { dx: Math.floor(icon.width * 0.28), dy: Math.floor(icon.height * 0.55) } : null;
       drawCharacter(ctx, kx, ky, {
@@ -5588,8 +5841,8 @@
       }
       if (p.flashT > 0 && WEAPONS[p.weaponIdx].kind !== "wand") {
         const fa = p.aim;
-        const fx = p.x + Math.cos(fa) * 32 - camX;
-        const fy = p.y - 34 + Math.sin(fa) * 32 - camY;
+        const fx = renderPx + Math.cos(fa) * 32 - camX;
+        const fy = renderPy - 34 + Math.sin(fa) * 32 - camY;
         ctx.fillStyle = "#fff3a6";
         ctx.beginPath();
         ctx.arc(fx, fy, 7 + Math.random() * 5, 0, Math.PI * 2);

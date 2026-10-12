@@ -446,11 +446,14 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     const b = es.bullets[i]
     b.life -= dt
     if (b.life <= 0) {
-      es.bullets.splice(i, 1)
+      const last = es.bullets.pop()!
+      if (i < es.bullets.length) es.bullets[i] = last
       continue
     }
     const steps = Math.max(1, Math.ceil((Math.hypot(b.vx, b.vy) * dt) / (CELL * 1.2)))
     let dead = false
+    let lastHitBodyId = -1
+
     for (let s = 0; s < steps && !dead; s++) {
       b.x += (b.vx * dt) / steps
       b.y += (b.vy * dt) / steps
@@ -460,33 +463,39 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
       }
       if (b.y < 0) continue
       if (b.x >= 0 && b.y >= 0 && b.x < world.W && b.y < world.H && world.solidAtWorld(b.x, b.y)) {
-        // Direct kinetic hit on solid body
-        world.hitBodyAt(b.x, b.y, b.dmg, b.vx * 0.04, b.vy * 0.04)
-        // impact: small clean hole (sparser for a nicer look)
-        if (Math.random() < 0.8) {
-          world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true })
-        }
-        const pan = Math.max(-1, Math.min(1, (b.x / world.W) * 2 - 1))
-        sound.hit(Math.random() < 0.5 ? 'paper' : 'block', 0.8, pan)
-        // spark
-        for (let k = 0; k < 3; k++) {
-          world.spawnParticle({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300, life: 0.2, max: 0.2, kind: 'spark', color: '#ffd23d', size: 2 })
-        }
-        b.pierce--
-        if (b.pierce <= 0) dead = true
-        else {
-          b.vx *= 0.82
-          b.vy *= 0.82
+        const bodyHit = world.findBodyAt(b.x, b.y)
+        // Prevent repeated hits on the same body in a single pass
+        if (!bodyHit || bodyHit.id !== lastHitBodyId) {
+          if (bodyHit) lastHitBodyId = bodyHit.id
+          world.hitBodyAt(b.x, b.y, b.dmg, b.vx * 0.04, b.vy * 0.04)
+          // impact: small clean hole (sparser for a nicer look)
+          if (Math.random() < 0.8) {
+            world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true })
+          }
+          const pan = Math.max(-1, Math.min(1, (b.x / world.W) * 2 - 1))
+          sound.hit(Math.random() < 0.5 ? 'paper' : 'block', 0.8, pan)
+          // spark
+          for (let k = 0; k < 3; k++) {
+            world.spawnParticle({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300, life: 0.2, max: 0.2, kind: 'spark', color: '#ffd23d', size: 2 })
+          }
+          b.pierce--
+          if (b.pierce <= 0) dead = true
+          else {
+            b.vx *= 0.82
+            b.vy *= 0.82
+          }
         }
       }
     }
-    if (dead) es.bullets.splice(i, 1)
-    else if (Math.random() < 0.35) {
+    if (dead) {
+      const last = es.bullets.pop()!
+      if (i < es.bullets.length) es.bullets[i] = last
+    } else if (Math.random() < 0.35) {
       world.spawnParticle({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.1, max: 0.1, kind: 'spark', color: b.color, size: 2 })
     }
   }
 
-  // rockets & mirvs
+  // rockets & mirvs (with swept collision detection to prevent thin surface tunneling)
   for (let i = es.rockets.length - 1; i >= 0; i--) {
     const r = es.rockets[i]
     r.life -= dt
@@ -495,16 +504,35 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
       r.vy += (r.bomblets > 0 ? 320 : 60) * dt // slight arc
       const stepX = r.vx * dt
       const stepY = r.vy * dt
-      r.x += stepX
-      r.y += stepY
-      r.distTraveled = (r.distTraveled ?? 0) + Math.hypot(stepX, stepY)
+      const stepDist = Math.hypot(stepX, stepY)
+      r.distTraveled = (r.distTraveled ?? 0) + stepDist
 
       if (r.smokeT <= 0) {
         r.smokeT = 0.03
         world.spawnParticle({ x: r.x, y: r.y + 4, vx: (Math.random() - 0.5) * 40, vy: 60 + Math.random() * 60, life: 0.5, max: 0.5, kind: 'smoke', color: '#5b5566', size: 3 + Math.random() * 3 })
         world.spawnParticle({ x: r.x, y: r.y + 4, vx: 0, vy: 40, life: 0.12, max: 0.12, kind: 'spark', color: '#ffd23d', size: 3 })
       }
-      const hitWorld = r.x < 0 || r.x > world.W || (r.y >= 0 && r.y < world.H && world.mat[world.idx(Math.floor(r.x / CELL), Math.floor(r.y / CELL))] !== 0)
+
+      // Swept collision detection along step vector
+      const sweepSteps = Math.max(1, Math.ceil(stepDist / 4))
+      let hitWorld = false
+      let hitX = r.x + stepX
+      let hitY = r.y + stepY
+
+      for (let s = 1; s <= sweepSteps; s++) {
+        const testX = r.x + (stepX * s) / sweepSteps
+        const testY = r.y + (stepY * s) / sweepSteps
+        if (testX < 0 || testX > world.W || testY > world.H || (testY >= 0 && world.solidAtWorld(testX, testY))) {
+          hitWorld = true
+          hitX = testX
+          hitY = testY
+          break
+        }
+      }
+
+      r.x = hitX
+      r.y = hitY
+
       const targetReached = r.targetDist !== undefined && r.distTraveled >= r.targetDist
 
       if (hitWorld || targetReached || r.y > world.H) {
@@ -528,33 +556,54 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
             })
           }
           sound.chutePop(0)
-          es.rockets.splice(i, 1)
+          const last = es.rockets.pop()!
+          if (i < es.rockets.length) es.rockets[i] = last
           continue
         }
         const detX = targetReached && !hitWorld && r.targetX !== undefined ? r.targetX : r.x
         const detY = targetReached && !hitWorld && r.targetY !== undefined ? r.targetY : r.y
         explodeAt(world, es, detX, detY, ROCKET_BLAST, { scorch: true })
-        es.rockets.splice(i, 1)
+        const last = es.rockets.pop()!
+        if (i < es.rockets.length) es.rockets[i] = last
         continue
       }
       if (r.life <= 0) {
         explodeAt(world, es, r.x, r.y, ROCKET_BLAST)
-        es.rockets.splice(i, 1)
+        const last = es.rockets.pop()!
+        if (i < es.rockets.length) es.rockets[i] = last
       }
     } else {
-      // parachute bomblet drift
+      // parachute bomblet drift with swept collision
       r.vy += (240 - r.vy) * 2.4 * dt // terminal fall
       r.vx *= 1 - 0.9 * dt
-      r.x += r.vx * dt
-      r.y += r.vy * dt
+      const bStepX = r.vx * dt
+      const bStepY = r.vy * dt
+      const bDist = Math.hypot(bStepX, bStepY)
+      const bSweepSteps = Math.max(1, Math.ceil(bDist / 3))
+      let bHitWorld = false
+
+      for (let s = 1; s <= bSweepSteps; s++) {
+        const testX = r.x + (bStepX * s) / bSweepSteps
+        const testY = r.y + (bStepY * s) / bSweepSteps
+        if (testX < 0 || testX > world.W || testY > world.H || (testY >= 0 && world.solidAtWorld(testX, testY))) {
+          bHitWorld = true
+          r.x = testX
+          r.y = testY
+          break
+        }
+      }
+      if (!bHitWorld) {
+        r.x += bStepX
+        r.y += bStepY
+      }
       r.fuse -= dt
       if (Math.random() < 0.1) {
         world.spawnParticle({ x: r.x, y: r.y - 10, vx: 0, vy: 0, life: 0.2, max: 0.2, kind: 'spark', color: '#ffffff', size: 2 })
       }
-      const hitWorld = r.x < 0 || r.x > world.W || (r.y >= 0 && r.y < world.H && world.mat[world.idx(Math.floor(r.x / CELL), Math.floor(r.y / CELL))] !== 0)
-      if ((hitWorld && r.vy > 0) || r.y > world.H || r.fuse <= 0) {
+      if ((bHitWorld && r.vy > 0) || r.y > world.H || r.fuse <= 0) {
         explodeAt(world, es, r.x, r.y, BOMBLET_BLAST, { scorch: true })
-        es.rockets.splice(i, 1)
+        const last = es.rockets.pop()!
+        if (i < es.rockets.length) es.rockets[i] = last
       }
     }
   }
@@ -567,21 +616,33 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     g.x += g.vx * dt
     g.y += g.vy * dt
     g.rot += g.vrot * dt
-    // bounce
-    if (world.solidAtWorld(g.x, g.y + 6)) {
+
+    // Ground bounce (only when falling downwards)
+    if (g.vy > 0 && world.solidAtWorld(g.x, g.y + 6)) {
       g.y -= 2
       g.vy = -Math.abs(g.vy) * 0.45
       g.vx *= 0.75
       g.vrot *= 0.7
       if (Math.abs(g.vy) > 90) sound.hit('block', 0.5, 0)
+    } else if (g.vy < 0 && world.solidAtWorld(g.x, g.y - 6)) {
+      // Ceiling impact (when moving upwards)
+      g.y += 2
+      g.vy = Math.abs(g.vy) * 0.45
     }
-    if (world.solidAtWorld(g.x + Math.sign(g.vx) * 6, g.y)) {
-      g.vx *= -0.5
+
+    // Wall bounce with nudge to prevent embedding
+    const sideDir = Math.sign(g.vx)
+    if (sideDir !== 0 && world.solidAtWorld(g.x + sideDir * 6, g.y)) {
+      g.x -= sideDir * 3
+      g.vx = -g.vx * 0.5
+      g.vrot *= 0.7
     }
+
     const nearTarget = g.targetX !== undefined && g.targetY !== undefined && Math.hypot(g.x - g.targetX, g.y - g.targetY) < 24 && g.fuse < 0.6
     if (g.fuse <= 0 || nearTarget) {
       explodeAt(world, es, g.x, g.y, GRENADE.radius, { scorch: true })
-      es.grenades.splice(i, 1)
+      const last = es.grenades.pop()!
+      if (i < es.grenades.length) es.grenades[i] = last
     }
   }
 
@@ -590,7 +651,8 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     const f = es.flames[i]
     f.life -= dt
     if (f.life <= 0) {
-      es.flames.splice(i, 1)
+      const last = es.flames.pop()!
+      if (i < es.flames.length) es.flames[i] = last
       continue
     }
     f.vx *= 1 - 2.6 * dt
@@ -598,17 +660,18 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     f.x += f.vx * dt
     f.y += f.vy * dt
     if (f.x < 0 || f.x > world.W || f.y > world.H) {
-      es.flames.splice(i, 1)
+      const last = es.flames.pop()!
+      if (i < es.flames.length) es.flames[i] = last
       continue
     }
     if (f.y >= 0) {
-      const gi = world.idx(Math.floor(f.x / CELL), Math.floor(f.y / CELL))
-      if (world.mat[gi] !== 0) {
+      if (world.solidAtWorld(f.x, f.y)) {
         world.igniteWorld(f.x, f.y, 9)
         for (let k = 0; k < 2; k++) {
           world.spawnParticle({ x: f.x, y: f.y, vx: (Math.random() - 0.5) * 90, vy: -60 - Math.random() * 90, life: 0.3, max: 0.3, kind: 'ember', color: ['#ffd23d', '#ff8a2a'][(Math.random() * 2) | 0], size: 2.5 })
         }
-        es.flames.splice(i, 1)
+        const last = es.flames.pop()!
+        if (i < es.flames.length) es.flames[i] = last
       }
     }
   }
@@ -658,7 +721,7 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
       d.vy += 4000 * dt
       d.y += d.vy * dt
       d.x += d.vx * dt
-      const hitWorld = d.y >= world.H || (d.y >= 0 && world.mat[world.idx(Math.max(0, Math.min(world.GW - 1, Math.floor(d.x / CELL))), Math.max(0, Math.min(world.GH - 1, Math.floor(d.y / CELL))))] !== 0)
+      const hitWorld = d.y >= world.H || (d.y >= 0 && world.solidAtWorld(d.x, d.y))
       if (hitWorld) {
         explodeAt(world, es, d.x, d.y, 26, { scorch: true })
         d.state = 2
@@ -671,7 +734,7 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
     }
   }
 
-  // neutron star
+  // neutron star (singularity physics: pulls in dynamic bodies, shards, and carves nearby matter)
   const st = es.star
   if (st) {
     st.t += dt
@@ -687,7 +750,7 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
         st.x < world.W &&
         st.y >= 0 &&
         st.y < world.H &&
-        world.mat[world.idx(Math.floor(st.x / CELL), Math.floor(st.y / CELL))] !== 0
+        world.solidAtWorld(st.x, st.y)
       const reachedTarget = st.targetDist !== undefined && st.distTraveled >= st.targetDist
 
       if (reachedTarget || hitDense) {
@@ -702,55 +765,77 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
       }
     }
     st.r = Math.min(st.maxR, 30 + st.t * 110)
-    // suck cells
-    const cx = Math.floor(st.x / CELL)
-    const cy = Math.floor(st.y / CELL)
-    const rc = Math.ceil(st.r / CELL)
-    const suckRate = 1
-    for (let k = 0; k < 160 * suckRate; k++) {
-      const a = Math.random() * Math.PI * 2
-      const rr = st.r * (0.15 + Math.random() * 0.85)
-      const xx = cx + Math.cos(a) * (rr / CELL)
-      const yy = cy + Math.sin(a) * (rr / CELL)
-      if (xx < 0 || yy < 0 || xx >= world.GW || yy >= world.GH) continue
-      const gi = world.idx(xx | 0, yy | 0)
-      if (world.mat[gi] === 1) {
-        world.mat[gi] = 0
-        world.pixBuf[gi] = 0
-        world.destroyedCells++
-        world.dirty = true
-        const own = world.owner[gi]
-        if (own >= 0) {
-          const el = world.elements.get(own)
-          if (el && el.alive) {
-            el.lost++
-            if (el.kind === 'glyph' && el.lost / Math.max(1, el.cells.length) > 0.25) world.popElement(el, st.x, st.y, 300)
-            else if (el.kind !== 'glyph' && el.lost / Math.max(1, el.cells.length) > 0.55) world.popElement(el, st.x, st.y, 300)
-          }
-        }
-        world.owner[gi] = -1
-        // spiral-in particle
-        const wx = (xx | 0) * CELL
-        const wy = (yy | 0) * CELL
-        if (Math.random() < 0.3) {
-          const dx = st.x - wx
-          const dy = st.y - wy
-          const dd = Math.hypot(dx, dy) || 1
-          world.spawnParticle({
-            x: wx,
-            y: wy,
-            vx: (dx / dd) * 300 + (-dy / dd) * 220,
-            vy: (dy / dd) * 300 + (dx / dd) * 220,
-            life: 0.5,
-            max: 0.5,
-            kind: 'spark',
-            color: ['#ffffff', '#7ff3ff', '#c05ae0', '#ffd23d'][(Math.random() * 4) | 0],
-            size: 2.5,
-          })
+
+    // 1) Gravitational pull on dynamic rigid bodies
+    for (let bi = 0; bi < world.dynamicBodies.length; bi++) {
+      const b = world.dynamicBodies[bi]
+      if (b.destroyed) continue
+      const bcx = b.x + b.w / 2
+      const bcy = b.y + b.h / 2
+      const dx = st.x - bcx
+      const dy = st.y - bcy
+      const dist = Math.hypot(dx, dy)
+      if (dist < st.r * 2.4) {
+        const pull = Math.min(2200, 380000 / Math.max(30, dist)) * (dt * 1.5)
+        const ndx = dx / (dist || 1)
+        const ndy = dy / (dist || 1)
+        b.vx += ndx * pull
+        b.vy += ndy * pull
+        b.vrot += 6 * dt
+
+        // Event horizon: crushed into singularity
+        if (dist < st.r * 0.45) {
+          world.shatterBody(b, st.x, st.y, 450)
         }
       }
     }
-    // jets (rotating beams)
+
+    // 2) Gravitational pull on shards
+    for (let si = 0; si < world.shards.length; si++) {
+      const s = world.shards[si]
+      const dx = st.x - s.x
+      const dy = st.y - s.y
+      const dist = Math.hypot(dx, dy)
+      if (dist < st.r * 2.6) {
+        const pull = 1800 * dt
+        s.vx += (dx / (dist || 1)) * pull
+        s.vy += (dy / (dist || 1)) * pull
+        if (dist < st.r * 0.35) {
+          s.life = 0
+        }
+      }
+    }
+
+    // 3) Periodic carve & dislodge of anchored matter within singularity radius
+    if (Math.random() < 0.25) {
+      world.damageCircle(st.x, st.y, st.r * 0.85, { debris: false, countAsDestroy: true, impulse: 360 })
+    }
+
+    // Singularity spiral-in particles
+    const cx = st.x
+    const cy = st.y
+    for (let k = 0; k < 4; k++) {
+      const a = Math.random() * Math.PI * 2
+      const rr = st.r * (0.2 + Math.random() * 0.8)
+      const wx = cx + Math.cos(a) * rr
+      const wy = cy + Math.sin(a) * rr
+      const dx = st.x - wx
+      const dy = st.y - wy
+      const dd = Math.hypot(dx, dy) || 1
+      world.spawnParticle({
+        x: wx,
+        y: wy,
+        vx: (dx / dd) * 300 + (-dy / dd) * 220,
+        vy: (dy / dd) * 300 + (dx / dd) * 220,
+        life: 0.35,
+        max: 0.35,
+        kind: 'spark',
+        color: ['#ffffff', '#7ff3ff', '#c05ae0', '#ffd23d'][(Math.random() * 4) | 0],
+        size: 2.5,
+      })
+    }
+
+    // Jets (rotating polar beams)
     if (Math.random() < 0.85) {
       for (const ja of [st.rot, st.rot + Math.PI]) {
         const jx = st.x + Math.cos(ja) * st.r * 2.4

@@ -71,6 +71,11 @@ export class Player {
   tumbleV = 0
   spawnProtect = 0
 
+  jetFuel = 1.0
+  maxJetFuel = 1.0
+  prevX: number
+  prevY: number
+
   weaponIdx = 0
   cooldown = 0
   switchT = 1
@@ -87,6 +92,8 @@ export class Player {
   constructor(x: number, y: number) {
     this.x = x
     this.y = y
+    this.prevX = x
+    this.prevY = y
   }
 
   get phys(): PhysicsConfig {
@@ -100,6 +107,9 @@ export class Player {
   respawnAt(x: number, y: number) {
     this.x = x
     this.y = y
+    this.prevX = x
+    this.prevY = y
+    this.jetFuel = 1.0
     this.vx = 0
     this.vy = 0
     this.tumble = 0
@@ -142,7 +152,12 @@ export class Player {
   }
 
   step(world: World, input: InputState, dt: number) {
+    this.prevX = this.x
+    this.prevY = this.y
     const phys = this.phys
+    if (this.grounded) {
+      this.jetFuel = Math.min(this.maxJetFuel, this.jetFuel + dt * 2.2)
+    }
     if (this.dropT > 0) this.dropT -= dt
     if (this.spawnProtect > 0) this.spawnProtect -= dt
 
@@ -272,10 +287,11 @@ export class Player {
     }
 
     // Jetpack (Hold Jump in Air after initial jump momentum)
-    const jetAllowed = input.jump && !this.grounded && this.buffer <= 0 && this.coyote <= 0 && this.dropT <= 0
+    const jetAllowed = input.jump && !this.grounded && this.buffer <= 0 && this.coyote <= 0 && this.dropT <= 0 && this.jetFuel > 0.04
     if (jetAllowed) {
       this.jetOn = true
       this.jetK = Math.min(1, this.jetK + dt * 6)
+      this.jetFuel = Math.max(0, this.jetFuel - dt * 0.42)
       this.vy -= phys.jetThrust * dt
       if (this.vy < -phys.jetMaxRise) {
         this.vy = -phys.jetMaxRise
@@ -333,13 +349,27 @@ export class Player {
       if (this.vy > maxFall) this.vy = maxFall
     }
 
-    // --- Y-Axis Integration & Landing ---
+    // --- Y-Axis Integration & Landing (Swept to prevent tunneling through thin surfaces) ---
     const oldGrounded = this.grounded
-    this.y += this.vy * dt
+    const dy = this.vy * dt
 
     if (this.vy >= 0) {
-      // Descending: check landing
-      if (this.dropT <= 0 && this.isGroundedAt(world, this.y)) {
+      // Descending: swept check along delta-Y
+      const subSteps = Math.max(1, Math.ceil(Math.abs(dy) / 3))
+      let landed = false
+      let landY = this.y
+
+      for (let s = 1; s <= subSteps; s++) {
+        const testY = this.y + (dy * s) / subSteps
+        if (this.dropT <= 0 && this.isGroundedAt(world, testY)) {
+          landed = true
+          landY = testY
+          break
+        }
+      }
+
+      if (landed) {
+        this.y = landY
         // Find exact ground surface height
         let maxStep = 12
         while (this.isGroundedAt(world, this.y - 1) && maxStep > 0 && this.y > 0) {
@@ -369,6 +399,7 @@ export class Player {
         this.flips = 1
         this.jetOn = false
       } else {
+        this.y += dy
         // Ground snapping: if previously grounded and moving across uneven/destroyed terrain without jumping
         let snapped = false
         if (oldGrounded && this.dropT <= 0 && this.buffer <= 0 && !input.jump && this.vy < 280) {
@@ -443,6 +474,33 @@ export class Player {
         if (!stepped) {
           // Blocked by full wall
           this.vx = 0
+        }
+      }
+    }
+
+    // Unsticking safeguard: if player is deeply embedded inside solid blocks
+    const feetStuck = this.solidAt(world, this.x, this.y - 2)
+    const midStuck = this.solidAt(world, this.x, this.y - 18)
+    if (feetStuck && midStuck) {
+      let unstuck = false
+      // Search upward first (up to 24px)
+      for (let up = 1; up <= 24; up++) {
+        if (!this.solidAt(world, this.x, this.y - up - 18) && !this.solidAt(world, this.x, this.y - up - 2)) {
+          this.y -= up
+          unstuck = true
+          break
+        }
+      }
+      if (!unstuck) {
+        // Search horizontal nudges
+        for (let side = 2; side <= 16; side += 2) {
+          if (!this.solidAt(world, this.x - side, this.y - 18)) {
+            this.x -= side
+            break
+          } else if (!this.solidAt(world, this.x + side, this.y - 18)) {
+            this.x += side
+            break
+          }
         }
       }
     }
