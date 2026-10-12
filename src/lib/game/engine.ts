@@ -104,6 +104,7 @@ export class DestroyEngine {
   private mouseInside = true
   private clientMouseX = 0
   private clientMouseY = 0
+  private hitStopTimer = 0
   private backdropCanvas: HTMLCanvasElement | null = null
 
   cb: EngineCallbacks
@@ -174,6 +175,14 @@ export class DestroyEngine {
     const skyPx = SKY_ROWS * CELL
     const bottomPx = 130 // breathing room below the page so the player is visible above the HUD
     this.world.onElementGone = undefined
+    this.hitStopTimer = 0
+    this.world.onShatter = (b, force) => {
+      // Impact hit-stop for visceral combat feedback on heavy destruction
+      if (b.mass > 350 || force > 450) {
+        this.hitStopTimer = Math.min(0.035, 0.015 + b.mass / 35000)
+        this.shake = Math.max(this.shake, Math.min(10, 3 + force / 90))
+      }
+    }
     this.world.init(level.W, level.H + skyPx + bottomPx)
     if (level.bodies && level.bodies.length > 0) {
       this.world.loadBodies(level.bodies, level.W, level.H, skyPx)
@@ -390,6 +399,16 @@ export class DestroyEngine {
     this.last = now
     if (this.paused) return
     if (dt > 0.1) dt = 0.1
+
+    if (this.hitStopTimer > 0) {
+      this.hitStopTimer -= dt
+      if (this.shake > 0) {
+        this.shakeX = (Math.random() - 0.5) * this.shake * 34
+        this.shakeY = (Math.random() - 0.5) * this.shake * 34
+      }
+      this.render()
+      return
+    }
 
     this.fpsAcc += dt
     this.fpsN++

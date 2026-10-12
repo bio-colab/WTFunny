@@ -47,6 +47,7 @@ export interface ShardPiece {
   life: number
   maxLife: number
   kind: 'glyph' | 'polygon'
+  material?: 'screen' | 'masonry' | 'beam' | 'pellet' | 'glyph'
 
   // Glyph shard (from shattered word):
   text?: string
@@ -206,6 +207,7 @@ export class World {
   chunks: Chunk[] = []
 
   onElementGone?: (el: LevelElement) => void
+  onShatter?: (b: SolidBody, force: number) => void
   onCellDestroyed?: (wx: number, wy: number, colorABGR: number) => void
 
   init(W: number, H: number) {
@@ -625,7 +627,7 @@ export class World {
     }
 
     if (b.hp <= 0) {
-      this.shatterBody(b, wx, wy, Math.hypot(impulseX, impulseY) || 300)
+      this.shatterBody(b, wx, wy, Math.hypot(impulseX, impulseY) || 300, impulseX, impulseY)
     }
 
     return b
@@ -682,7 +684,7 @@ export class World {
   }
 
   // Fracture and shatter a body into vector shards
-  shatterBody(b: SolidBody, hitX: number, hitY: number, force = 380) {
+  shatterBody(b: SolidBody, hitX: number, hitY: number, force = 380, impulseX = 0, impulseY = 0) {
     if (b.destroyed) return
     b.destroyed = true
     b.hp = 0
@@ -707,9 +709,12 @@ export class World {
     this.destroyedMass += b.mass
     this.destroyedCells += Math.round(b.mass * 2)
 
-    // Generate physical shards
+    // Trigger hit-stop and high-impact camera shake callback
+    this.onShatter?.(b, force)
+
+    // Generate physical shards based on material classification
     if (b.kind === 'word') {
-      const wordShards = generateWordShards(b, hitX, hitY, force)
+      const wordShards = generateWordShards(b, hitX, hitY, force, impulseX, impulseY)
       this.shards.push(...wordShards)
       this.lettersPopped++
 
@@ -718,8 +723,8 @@ export class World {
         this.spawnParticle({
           x: b.x + Math.random() * b.w,
           y: b.y + Math.random() * b.h,
-          vx: (Math.random() - 0.5) * 240,
-          vy: -80 - Math.random() * 200,
+          vx: (Math.random() - 0.5) * 240 + impulseX * 0.2,
+          vy: -80 - Math.random() * 200 + impulseY * 0.2,
           life: 0.6 + Math.random() * 0.6,
           max: 1.2,
           kind: 'paper',
@@ -730,25 +735,95 @@ export class World {
           grav: 1200,
         })
       }
-    } else {
-      const polyShards = generatePolygonShards(b, hitX, hitY, force)
-      this.shards.push(...polyShards)
+    } else if (b.kind === 'image') {
+      // 1) Digital Screen / Media Display: cracked LCD matrix quads
+      const screenShards = generateDigitalScreenShards(b, hitX, hitY, force, impulseX, impulseY)
+      this.shards.push(...screenShards)
       this.blocksBroken++
 
-      // Sparks and smoke clouds
-      this.puffAt(b.x + b.w / 2, b.y + b.h / 2, Math.max(12, Math.min(40, b.w / 2)))
-      for (let i = 0; i < 10; i++) {
+      // Digital screen glitch sparks & thin electrical smoke
+      this.puffAt(b.x + b.w / 2, b.y + b.h / 2, Math.max(10, Math.min(32, b.w / 3)))
+      const CYBER_SPARKS = ['#38bdf8', '#818cf8', '#c084fc', '#facc15', '#ffffff']
+      for (let i = 0; i < 12; i++) {
         this.spawnParticle({
           x: b.x + Math.random() * b.w,
           y: b.y + Math.random() * b.h,
-          vx: (Math.random() - 0.5) * 280,
-          vy: -100 - Math.random() * 220,
-          life: 0.5 + Math.random() * 0.5,
-          max: 1.0,
+          vx: (Math.random() - 0.5) * 320 + impulseX * 0.3,
+          vy: -100 - Math.random() * 220 + impulseY * 0.3,
+          life: 0.4 + Math.random() * 0.4,
+          max: 0.8,
+          kind: 'spark',
+          color: CYBER_SPARKS[(Math.random() * CYBER_SPARKS.length) | 0],
+          size: 2.5 + Math.random() * 2,
+          grav: 700,
+        })
+      }
+    } else if (b.w / b.h >= 2.8 || b.h / b.w >= 2.8) {
+      // 2) Structural Shear: elongated girders, navbars, and headers
+      const beamShards = generateStructuralBeamShards(b, hitX, hitY, force, impulseX, impulseY)
+      this.shards.push(...beamShards)
+      this.blocksBroken++
+
+      // Masonry / structural concrete dust clouds at shear points
+      const dustPuffs = Math.min(5, Math.max(2, Math.round(b.w / 120)))
+      for (let i = 0; i < dustPuffs; i++) {
+        const px = b.x + (b.w / (dustPuffs + 1)) * (i + 1)
+        this.puffAt(px, b.y + b.h / 2, 18)
+      }
+      for (let i = 0; i < 8; i++) {
+        this.spawnParticle({
+          x: b.x + Math.random() * b.w,
+          y: b.y + Math.random() * b.h,
+          vx: (Math.random() - 0.5) * 220,
+          vy: -60 - Math.random() * 180,
+          life: 0.6 + Math.random() * 0.5,
+          max: 1.1,
+          kind: 'debris',
+          color: '#94a3b8',
+          size: 3 + Math.random() * 3,
+          grav: 1100,
+        })
+      }
+    } else if (b.w <= 160 && b.h <= 52) {
+      // 3) Compact Solid Pellets: buttons, badges, chips
+      const pillShards = generateCompactPillShards(b, hitX, hitY, force, impulseX, impulseY)
+      this.shards.push(...pillShards)
+      this.blocksBroken++
+
+      for (let i = 0; i < 6; i++) {
+        this.spawnParticle({
+          x: b.x + Math.random() * b.w,
+          y: b.y + Math.random() * b.h,
+          vx: (Math.random() - 0.5) * 260 + impulseX * 0.25,
+          vy: -90 - Math.random() * 190 + impulseY * 0.25,
+          life: 0.4 + Math.random() * 0.4,
+          max: 0.8,
           kind: 'spark',
           color: FIRE_COLORS[(Math.random() * FIRE_COLORS.length) | 0],
-          size: 3 + Math.random() * 2,
+          size: 2.5 + Math.random() * 1.5,
           grav: 900,
+        })
+      }
+    } else {
+      // 4) Dual-Scale Masonry Slabs: epicentral micro-gravel + heavy structural blocks
+      const masonryShards = generateMasonrySlabs(b, hitX, hitY, force, impulseX, impulseY)
+      this.shards.push(...masonryShards)
+      this.blocksBroken++
+
+      // Epicenter blast puff and stone rubble debris
+      this.puffAt(hitX, hitY, Math.max(16, Math.min(45, b.w / 2.5)))
+      for (let i = 0; i < 10; i++) {
+        this.spawnParticle({
+          x: hitX + (Math.random() - 0.5) * 30,
+          y: hitY + (Math.random() - 0.5) * 30,
+          vx: (Math.random() - 0.5) * 300 + impulseX * 0.35,
+          vy: -120 - Math.random() * 240 + impulseY * 0.35,
+          life: 0.5 + Math.random() * 0.5,
+          max: 1.0,
+          kind: 'debris',
+          color: '#64748b',
+          size: 2.5 + Math.random() * 3,
+          grav: 1200,
         })
       }
     }
@@ -772,7 +847,7 @@ export class World {
       if (b.anchored) {
         this.dislodgeBody(b, b.x - fromX, b.y - fromY)
       } else {
-        this.shatterBody(b, fromX, fromY, impulse)
+        this.shatterBody(b, fromX, fromY, impulse, b.x - fromX, b.y - fromY)
       }
     }
   }
@@ -817,7 +892,7 @@ export class World {
       }
 
       if (b.hp <= 0) {
-        this.shatterBody(b, wx, wy, imp * falloff)
+        this.shatterBody(b, wx, wy, imp * falloff, dx * imp * falloff, dy * imp * falloff)
       } else {
         const blastImpulse = imp * falloff
         const isLarge = b.mass > 1200
@@ -878,7 +953,7 @@ export class World {
 
       b.hp -= applied * 0.4
       if (b.hp <= 0) {
-        this.shatterBody(b, wx, wy, applied)
+        this.shatterBody(b, wx, wy, applied, dx * applied, dy * applied)
       } else if (b.anchored) {
         this.dislodgeBody(b, dx * applied, dy * applied - 100)
       } else {
@@ -1331,6 +1406,21 @@ export class World {
         ctx.shadowBlur = 4
         ctx.fillText(s.text, 0, 0)
       } else if (s.kind === 'polygon' && s.poly && s.poly.length >= 3) {
+        // 3D Extrusion bevel underneath for tangible slabs, beams, and pellets
+        if (s.material !== 'glyph' && s.material !== 'screen') {
+          ctx.save()
+          ctx.translate(1.5, 2.2)
+          ctx.beginPath()
+          ctx.moveTo(s.poly[0].x, s.poly[0].y)
+          for (let pIdx = 1; pIdx < s.poly.length; pIdx++) {
+            ctx.lineTo(s.poly[pIdx].x, s.poly[pIdx].y)
+          }
+          ctx.closePath()
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'
+          ctx.fill()
+          ctx.restore()
+        }
+
         ctx.beginPath()
         ctx.moveTo(s.poly[0].x, s.poly[0].y)
         for (let pIdx = 1; pIdx < s.poly.length; pIdx++) {
@@ -1343,15 +1433,30 @@ export class World {
           ctx.clip()
           ctx.drawImage(s.image, -(s.uvX ?? 0), -(s.uvY ?? 0), s.uvW ?? 100, s.uvH ?? 100)
           ctx.restore()
+
+          // Screen / LCD dark border grid line
+          ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)'
+          ctx.lineWidth = 1
+          ctx.stroke()
         } else {
           ctx.fillStyle = s.colorStr || '#718096'
           ctx.fill()
-        }
 
-        // Shard edge highlight
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
-        ctx.lineWidth = 1
-        ctx.stroke()
+          if (s.material === 'masonry' || s.material === 'beam') {
+            // Subtle tectonic edge giving masonry solid physical weight
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)'
+            ctx.lineWidth = 1
+            ctx.stroke()
+          } else if (s.material === 'pellet') {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)'
+            ctx.lineWidth = 1
+            ctx.stroke()
+          } else {
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)'
+            ctx.lineWidth = 1
+            ctx.stroke()
+          }
+        }
       }
       ctx.restore()
     }
@@ -1495,12 +1600,325 @@ function drawVectorBox(
   ctx.restore()
 }
 
-// Generate jagged convex polygon shards for cards, boxes, and images
-function generatePolygonShards(
+// 1) Digital Screen / Media Display fracture: cracked LCD matrix quads with jittered fault lines
+function generateDigitalScreenShards(
   body: SolidBody,
   hitX: number,
   hitY: number,
-  force: number
+  force: number,
+  impulseX = 0,
+  impulseY = 0
+): ShardPiece[] {
+  const shards: ShardPiece[] = []
+  const w = body.w
+  const h = body.h
+  const localHitX = Math.max(0, Math.min(w, hitX - body.x))
+  const localHitY = Math.max(0, Math.min(h, hitY - body.y))
+
+  const cols = w >= 240 ? 4 : w >= 110 ? 3 : 2
+  const rows = h >= 180 ? 3 : 2
+
+  const xSplits: number[] = [0]
+  for (let c = 1; c < cols; c++) {
+    const base = (w / cols) * c
+    const jitter = (Math.random() - 0.5) * (w / cols) * 0.28
+    xSplits.push(Math.max(xSplits[c - 1] + 12, Math.min(w - 12, base + jitter)))
+  }
+  xSplits.push(w)
+
+  const ySplits: number[] = [0]
+  for (let r = 1; r < rows; r++) {
+    const base = (h / rows) * r
+    const jitter = (Math.random() - 0.5) * (h / rows) * 0.28
+    ySplits.push(Math.max(ySplits[r - 1] + 10, Math.min(h - 10, base + jitter)))
+  }
+  ySplits.push(h)
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x0 = xSplits[c]
+      const x1 = xSplits[c + 1]
+      const y0 = ySplits[r]
+      const y1 = ySplits[r + 1]
+
+      const cx = (x0 + x1) / 2
+      const cy = (y0 + y1) / 2
+
+      const poly = [
+        { x: x0 - cx, y: y0 - cy },
+        { x: x1 - cx, y: y0 - cy },
+        { x: x1 - cx, y: y1 - cy },
+        { x: x0 - cx, y: y1 - cy },
+      ]
+
+      const wx = body.x + cx
+      const wy = body.y + cy
+      let dx = cx - localHitX
+      let dy = cy - localHitY
+      const dist = Math.hypot(dx, dy) || 1
+      dx /= dist
+      dy /= dist
+
+      const blastSpeed = force * (0.55 + Math.random() * 0.55)
+      const pushX = dx * blastSpeed + impulseX * 0.35 + (Math.random() - 0.5) * 80
+      const pushY = dy * blastSpeed + impulseY * 0.35 - 90 - Math.random() * 140
+
+      shards.push({
+        x: wx,
+        y: wy,
+        vx: body.vx * 0.35 + pushX,
+        vy: body.vy * 0.35 + pushY,
+        rot: 0,
+        vrot: (Math.random() - 0.5) * (9 + force / 75),
+        life: 3.2 + Math.random() * 1.8,
+        maxLife: 5.0,
+        kind: 'polygon',
+        material: 'screen',
+        poly,
+        colorStr: body.bg || '#1e293b',
+        border: body.border,
+        image: body.image,
+        uvX: cx,
+        uvY: cy,
+        uvW: w,
+        uvH: h,
+        settled: false,
+      })
+    }
+  }
+
+  return shards
+}
+
+// 2) Structural Shear: elongated girders, navbars, and headers
+function generateStructuralBeamShards(
+  body: SolidBody,
+  hitX: number,
+  hitY: number,
+  force: number,
+  impulseX = 0,
+  impulseY = 0
+): ShardPiece[] {
+  const shards: ShardPiece[] = []
+  const w = body.w
+  const h = body.h
+  const isHorizontal = w >= h
+
+  if (isHorizontal) {
+    const segCount = Math.min(8, Math.max(3, Math.round(w / 75)))
+    const cuts: { topX: number; botX: number }[] = [{ topX: 0, botX: 0 }]
+
+    for (let i = 1; i < segCount; i++) {
+      const baseX = (w / segCount) * i
+      const shearAngleOffset = (h * 0.38 + Math.random() * h * 0.3) * (i % 2 === 0 ? 1 : -1)
+      const topX = Math.max(cuts[i - 1].topX + 8, Math.min(w - 8, baseX - shearAngleOffset / 2))
+      const botX = Math.max(cuts[i - 1].botX + 8, Math.min(w - 8, baseX + shearAngleOffset / 2))
+      cuts.push({ topX, botX })
+    }
+    cuts.push({ topX: w, botX: w })
+
+    for (let i = 0; i < segCount; i++) {
+      const p0 = { x: cuts[i].topX, y: 0 }
+      const p1 = { x: cuts[i + 1].topX, y: 0 }
+      const p2 = { x: cuts[i + 1].botX, y: h }
+      const p3 = { x: cuts[i].botX, y: h }
+
+      const cx = (p0.x + p1.x + p2.x + p3.x) / 4
+      const cy = (p0.y + p1.y + p2.y + p3.y) / 4
+
+      const poly = [
+        { x: p0.x - cx, y: p0.y - cy },
+        { x: p1.x - cx, y: p1.y - cy },
+        { x: p2.x - cx, y: p2.y - cy },
+        { x: p3.x - cx, y: p3.y - cy },
+      ]
+
+      const wx = body.x + cx
+      const wy = body.y + cy
+      const distFromHit = Math.abs(wx - hitX)
+      const proximity = Math.max(0.25, 1 - distFromHit / (w * 0.75))
+      const blastSpeed = force * (0.4 + proximity * 0.6)
+      const pushX = Math.sign(wx - hitX || 1) * blastSpeed * 0.65 + impulseX * 0.25 + (Math.random() - 0.5) * 60
+      const pushY = -60 * proximity - Math.random() * 120 + impulseY * 0.25
+
+      shards.push({
+        x: wx,
+        y: wy,
+        vx: body.vx * 0.3 + pushX,
+        vy: body.vy * 0.3 + pushY,
+        rot: 0,
+        vrot: (Math.random() - 0.5) * (5 + 8 * proximity),
+        life: 3.5 + Math.random() * 1.5,
+        maxLife: 5.0,
+        kind: 'polygon',
+        material: 'beam',
+        poly,
+        colorStr: body.bg || '#94a3b8',
+        border: body.border,
+        image: body.image,
+        uvX: cx,
+        uvY: cy,
+        uvW: w,
+        uvH: h,
+        settled: false,
+      })
+    }
+  } else {
+    const segCount = Math.min(8, Math.max(3, Math.round(h / 75)))
+    const cuts: { leftY: number; rightY: number }[] = [{ leftY: 0, rightY: 0 }]
+
+    for (let i = 1; i < segCount; i++) {
+      const baseY = (h / segCount) * i
+      const shearOffset = (w * 0.38 + Math.random() * w * 0.3) * (i % 2 === 0 ? 1 : -1)
+      const leftY = Math.max(cuts[i - 1].leftY + 8, Math.min(h - 8, baseY - shearOffset / 2))
+      const rightY = Math.max(cuts[i - 1].rightY + 8, Math.min(h - 8, baseY + shearOffset / 2))
+      cuts.push({ leftY, rightY })
+    }
+    cuts.push({ leftY: h, rightY: h })
+
+    for (let i = 0; i < segCount; i++) {
+      const p0 = { x: 0, y: cuts[i].leftY }
+      const p1 = { x: w, y: cuts[i].rightY }
+      const p2 = { x: w, y: cuts[i + 1].rightY }
+      const p3 = { x: 0, y: cuts[i + 1].leftY }
+
+      const cx = (p0.x + p1.x + p2.x + p3.x) / 4
+      const cy = (p0.y + p1.y + p2.y + p3.y) / 4
+
+      const poly = [
+        { x: p0.x - cx, y: p0.y - cy },
+        { x: p1.x - cx, y: p1.y - cy },
+        { x: p2.x - cx, y: p2.y - cy },
+        { x: p3.x - cx, y: p3.y - cy },
+      ]
+
+      const wx = body.x + cx
+      const wy = body.y + cy
+      const distFromHit = Math.abs(wy - hitY)
+      const proximity = Math.max(0.25, 1 - distFromHit / (h * 0.75))
+      const blastSpeed = force * (0.4 + proximity * 0.6)
+      const pushX = (Math.random() - 0.5) * 100 + impulseX * 0.25
+      const pushY = Math.sign(wy - hitY || 1) * blastSpeed * 0.5 - 60 * proximity + impulseY * 0.25
+
+      shards.push({
+        x: wx,
+        y: wy,
+        vx: body.vx * 0.3 + pushX,
+        vy: body.vy * 0.3 + pushY,
+        rot: 0,
+        vrot: (Math.random() - 0.5) * (5 + 8 * proximity),
+        life: 3.5 + Math.random() * 1.5,
+        maxLife: 5.0,
+        kind: 'polygon',
+        material: 'beam',
+        poly,
+        colorStr: body.bg || '#94a3b8',
+        border: body.border,
+        image: body.image,
+        uvX: cx,
+        uvY: cy,
+        uvW: w,
+        uvH: h,
+        settled: false,
+      })
+    }
+  }
+
+  return shards
+}
+
+// 3) Compact Solid Pellets: buttons, badges, chips
+function generateCompactPillShards(
+  body: SolidBody,
+  hitX: number,
+  hitY: number,
+  force: number,
+  impulseX = 0,
+  impulseY = 0
+): ShardPiece[] {
+  const shards: ShardPiece[] = []
+  const w = body.w
+  const h = body.h
+
+  const splitX = w * (0.42 + Math.random() * 0.16)
+  const splitY = h * (0.42 + Math.random() * 0.16)
+
+  const quads = [
+    [
+      { x: 0, y: 0 },
+      { x: splitX, y: 0 },
+      { x: splitX + (Math.random() - 0.5) * 6, y: splitY },
+      { x: 0, y: splitY },
+    ],
+    [
+      { x: splitX, y: 0 },
+      { x: w, y: 0 },
+      { x: w, y: splitY },
+      { x: splitX + (Math.random() - 0.5) * 6, y: splitY },
+    ],
+    [
+      { x: 0, y: splitY },
+      { x: splitX + (Math.random() - 0.5) * 6, y: splitY },
+      { x: splitX, y: h },
+      { x: 0, y: h },
+    ],
+    [
+      { x: splitX + (Math.random() - 0.5) * 6, y: splitY },
+      { x: w, y: splitY },
+      { x: w, y: h },
+      { x: splitX, y: h },
+    ],
+  ]
+
+  for (const q of quads) {
+    const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4
+    const cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4
+
+    const poly = q.map((pt) => ({ x: pt.x - cx, y: pt.y - cy }))
+    const wx = body.x + cx
+    const wy = body.y + cy
+
+    let dx = wx - hitX
+    let dy = wy - hitY
+    const d = Math.hypot(dx, dy) || 1
+    dx /= d
+    dy /= d
+
+    const blastSpeed = force * (0.65 + Math.random() * 0.5)
+    shards.push({
+      x: wx,
+      y: wy,
+      vx: body.vx * 0.35 + dx * blastSpeed + impulseX * 0.3 + (Math.random() - 0.5) * 90,
+      vy: body.vy * 0.35 + dy * blastSpeed + impulseY * 0.3 - 100 - Math.random() * 150,
+      rot: 0,
+      vrot: (Math.random() - 0.5) * (12 + force / 50),
+      life: 3.2 + Math.random() * 1.5,
+      maxLife: 4.8,
+      kind: 'polygon',
+      material: 'pellet',
+      poly,
+      colorStr: body.bg || '#3b82f6',
+      border: body.border,
+      image: body.image,
+      uvX: cx,
+      uvY: cy,
+      uvW: w,
+      uvH: h,
+      settled: false,
+    })
+  }
+
+  return shards
+}
+
+// 4) Dual-Scale Masonry Slabs: epicentral micro-gravel + heavy structural blocks
+function generateMasonrySlabs(
+  body: SolidBody,
+  hitX: number,
+  hitY: number,
+  force: number,
+  impulseX = 0,
+  impulseY = 0
 ): ShardPiece[] {
   const shards: ShardPiece[] = []
   const w = body.w
@@ -1508,28 +1926,84 @@ function generatePolygonShards(
   const localX = Math.max(w * 0.15, Math.min(w * 0.85, hitX - body.x))
   const localY = Math.max(h * 0.15, Math.min(h * 0.85, hitY - body.y))
 
-  const pts: { x: number; y: number }[] = [
+  // --- Scale 1: Epicenter Micro-Gravel (4-6 high-speed small debris chunks) ---
+  const gravelCount = 5
+  for (let g = 0; g < gravelCount; g++) {
+    const angle = (Math.PI * 2 * g) / gravelCount + (Math.random() - 0.5) * 0.6
+    const dist = 6 + Math.random() * 16
+    const gx = localX + Math.cos(angle) * dist
+    const gy = localY + Math.sin(angle) * dist
+
+    const gSize = 4 + Math.random() * 6
+    const poly = [
+      { x: -gSize + (Math.random() - 0.5) * 2, y: -gSize },
+      { x: gSize, y: -gSize + (Math.random() - 0.5) * 2 },
+      { x: gSize + (Math.random() - 0.5) * 2, y: gSize },
+      { x: -gSize, y: gSize + (Math.random() - 0.5) * 2 },
+    ]
+
+    const blastSpeed = force * (0.8 + Math.random() * 0.7)
+    shards.push({
+      x: body.x + gx,
+      y: body.y + gy,
+      vx: body.vx * 0.3 + Math.cos(angle) * blastSpeed + impulseX * 0.4 + (Math.random() - 0.5) * 120,
+      vy: body.vy * 0.3 + Math.sin(angle) * blastSpeed + impulseY * 0.4 - 110 - Math.random() * 160,
+      rot: 0,
+      vrot: (Math.random() - 0.5) * (16 + force / 40),
+      life: 2.2 + Math.random() * 1.4,
+      maxLife: 3.6,
+      kind: 'polygon',
+      material: 'pellet',
+      poly,
+      colorStr: body.bg || '#718096',
+      border: null,
+      uvX: gx,
+      uvY: gy,
+      uvW: w,
+      uvH: h,
+      settled: false,
+    })
+  }
+
+  // --- Scale 2: Heavy Structural Slabs (4-6 large polygonal slabs) ---
+  const perimeterPts: { x: number; y: number }[] = [
     { x: 0, y: 0 },
-    { x: w * (0.35 + Math.random() * 0.3), y: 0 },
+    { x: w * (0.4 + Math.random() * 0.2), y: 0 },
     { x: w, y: 0 },
-    { x: w, y: h * (0.35 + Math.random() * 0.3) },
+    { x: w, y: h * (0.4 + Math.random() * 0.2) },
     { x: w, y: h },
-    { x: w * (0.35 + Math.random() * 0.3), y: h },
+    { x: w * (0.4 + Math.random() * 0.2), y: h },
     { x: 0, y: h },
-    { x: 0, y: h * (0.35 + Math.random() * 0.3) },
+    { x: 0, y: h * (0.4 + Math.random() * 0.2) },
   ]
 
-  for (let i = 0; i < pts.length; i++) {
-    const p1 = pts[i]
-    const p2 = pts[(i + 1) % pts.length]
+  const innerRingRadius = Math.max(14, Math.min(36, Math.min(w, h) * 0.22))
+  const numSlabs = perimeterPts.length
 
-    const cx = (localX + p1.x + p2.x) / 3
-    const cy = (localY + p1.y + p2.y) / 3
+  for (let i = 0; i < numSlabs; i++) {
+    const p1 = perimeterPts[i]
+    const p2 = perimeterPts[(i + 1) % numSlabs]
+
+    const ang1 = Math.atan2(p1.y - localY, p1.x - localX)
+    const ang2 = Math.atan2(p2.y - localY, p2.x - localX)
+
+    const inP1 = {
+      x: localX + Math.cos(ang1) * innerRingRadius * (0.8 + Math.random() * 0.4),
+      y: localY + Math.sin(ang1) * innerRingRadius * (0.8 + Math.random() * 0.4),
+    }
+    const inP2 = {
+      x: localX + Math.cos(ang2) * innerRingRadius * (0.8 + Math.random() * 0.4),
+      y: localY + Math.sin(ang2) * innerRingRadius * (0.8 + Math.random() * 0.4),
+    }
+
+    const cx = (p1.x + p2.x + inP2.x + inP1.x) / 4
+    const cy = (p1.y + p2.y + inP2.y + inP1.y) / 4
 
     const poly = [
-      { x: localX - cx, y: localY - cy },
       { x: p1.x - cx, y: p1.y - cy },
       { x: p2.x - cx, y: p2.y - cy },
+      { x: inP2.x - cx, y: inP2.y - cy },
+      { x: inP1.x - cx, y: inP1.y - cy },
     ]
 
     const wx = body.x + cx
@@ -1537,18 +2011,19 @@ function generatePolygonShards(
     const dx = cx - localX
     const dy = cy - localY
     const d = Math.hypot(dx, dy) || 1
-    const blastSpeed = force * (0.6 + Math.random() * 0.6)
+    const blastSpeed = force * (0.45 + Math.random() * 0.5)
 
     shards.push({
       x: wx,
       y: wy,
-      vx: body.vx * 0.4 + (dx / d) * blastSpeed + (Math.random() - 0.5) * 140,
-      vy: body.vy * 0.4 + (dy / d) * blastSpeed - 120 - Math.random() * 160,
+      vx: body.vx * 0.4 + (dx / d) * blastSpeed + impulseX * 0.25 + (Math.random() - 0.5) * 100,
+      vy: body.vy * 0.4 + (dy / d) * blastSpeed + impulseY * 0.25 - 90 - Math.random() * 150,
       rot: 0,
-      vrot: (Math.random() - 0.5) * (10 + force / 60),
-      life: 3.2 + Math.random() * 1.6,
-      maxLife: 4.8,
+      vrot: (Math.random() - 0.5) * (7 + force / 90),
+      life: 3.5 + Math.random() * 1.5,
+      maxLife: 5.0,
       kind: 'polygon',
+      material: 'masonry',
       poly,
       colorStr: body.bg || '#7a828e',
       border: body.border,
@@ -1569,7 +2044,9 @@ function generateWordShards(
   body: SolidBody,
   hitX: number,
   hitY: number,
-  force: number
+  force: number,
+  impulseX = 0,
+  impulseY = 0
 ): ShardPiece[] {
   const shards: ShardPiece[] = []
   const txt = body.text || ''
@@ -1600,13 +2077,14 @@ function generateWordShards(
     shards.push({
       x: wx,
       y: wy,
-      vx: body.vx * 0.35 + dx * mag + (Math.random() - 0.5) * 160,
-      vy: body.vy * 0.35 + dy * mag - 140 - Math.random() * 180,
+      vx: body.vx * 0.35 + dx * mag + impulseX * 0.3 + (Math.random() - 0.5) * 160,
+      vy: body.vy * 0.35 + dy * mag + impulseY * 0.3 - 140 - Math.random() * 180,
       rot: 0,
       vrot: (Math.random() - 0.5) * (14 + force / 40),
       life: 3.5 + Math.random() * 1.5,
       maxLife: 5.0,
       kind: 'glyph',
+      material: 'glyph',
       text: c.str,
       font: body.font,
       color: body.color,
