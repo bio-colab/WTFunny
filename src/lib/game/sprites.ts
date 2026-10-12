@@ -461,6 +461,8 @@ export type CharacterDrawOpts = {
   weapon?: HTMLCanvasElement | null
   weaponAnchor?: { dx: number; dy: number } | null
   jetK: number
+  squash?: number // landing squash & stretch (0..~0.12)
+  switchT?: number // weapon-swap progress 0..1
   scale?: number
   skin?: CharacterSkin
   colors?: {
@@ -488,7 +490,8 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
   ctx.save()
   ctx.translate(x, y)
   if (opts.tumble) ctx.rotate(opts.tumble)
-  ctx.scale(opts.facing * s, s)
+  const sq = opts.squash ?? 0
+  ctx.scale(opts.facing * s * (1 + sq), s * (1 - sq))
 
   ctx.lineCap = 'round'
 
@@ -505,29 +508,31 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
   ctx.lineWidth = skin === 'robot' || skin === 'commando' ? 5.5 : 4.5
 
   if (opts.grounded && !opts.jetOn) {
+    const idle = opts.runPhase === 0 // standing: legs used to overlap into a single line
+    const sp = idle ? 3.5 : 0
     const p = Math.sin(opts.runPhase * Math.PI * 2)
     const p2 = Math.sin(opts.runPhase * Math.PI * 2 + Math.PI)
     // Leg 1
     ctx.beginPath()
     ctx.moveTo(0, hipY)
-    ctx.lineTo(p * 8, hipY + 10)
-    ctx.lineTo(p * 11, 0)
+    ctx.lineTo(p * 8 + sp, hipY + 10)
+    ctx.lineTo(p * 11 + sp, 0)
     ctx.stroke()
     // Foot/Boot
     if (skin === 'commando' || skin === 'robot') {
       ctx.fillStyle = colors.outline
-      ctx.fillRect(p * 11 - 3, -3, 8, 3.5)
+      ctx.fillRect(p * 11 + sp - 3, -3, 8, 3.5)
     }
 
     // Leg 2
     ctx.beginPath()
     ctx.moveTo(0, hipY)
-    ctx.lineTo(p2 * 8, hipY + 10)
-    ctx.lineTo(p2 * 11, 0)
+    ctx.lineTo(p2 * 8 - sp, hipY + 10)
+    ctx.lineTo(p2 * 11 - sp, 0)
     ctx.stroke()
     if (skin === 'commando' || skin === 'robot') {
       ctx.fillStyle = colors.outline
-      ctx.fillRect(p2 * 11 - 3, -3, 8, 3.5)
+      ctx.fillRect(p2 * 11 - sp - 3, -3, 8, 3.5)
     }
   } else if (opts.jetOn) {
     ctx.beginPath()
@@ -711,7 +716,7 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
   ctx.save()
   ctx.translate(0, -34) // Shoulder joint
   const aimLocal = opts.facing === 1 ? opts.aim : Math.PI - opts.aim
-  ctx.rotate(aimLocal)
+  ctx.rotate(aimLocal + (1 - Math.min(1, opts.switchT ?? 1)) * 0.9) // weapon raise on swap
 
   const handX = 9
   const handY = 1

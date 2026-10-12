@@ -747,6 +747,18 @@
         }
       }
     }
+    // Settled debris can be woken back up by blast impulses, explosions, or gravity wells
+    wakeBody(b) {
+      if (!b.settled || b.destroyed) return;
+      b.settled = false;
+      b.settleT = 0;
+      const at = this.settledBodies.indexOf(b);
+      if (at >= 0) {
+        const last = this.settledBodies.pop();
+        if (at < this.settledBodies.length) this.settledBodies[at] = last;
+      }
+      if (!this.dynamicBodies.includes(b)) this.dynamicBodies.push(b);
+    }
     // Fracture and shatter a body into vector shards
     shatterBody(b, hitX, hitY, force = 380) {
       if (b.destroyed) return;
@@ -864,6 +876,7 @@
           if (b.anchored && (b.hp <= hpDislodgeThresh || blastImpulse >= impulseDislodgeThresh)) {
             this.dislodgeBody(b, dx * blastImpulse, dy * blastImpulse - 120);
           } else if (!b.anchored) {
+            this.wakeBody(b);
             const pushFactor = Math.min(12, 180 / b.mass);
             b.vx += dx * blastImpulse * pushFactor;
             b.vy += (dy * blastImpulse - 120) * pushFactor;
@@ -911,6 +924,7 @@
         } else if (b.anchored) {
           this.dislodgeBody(b, dx * applied, dy * applied - 100);
         } else {
+          this.wakeBody(b);
           const pushFactor = Math.min(12, 180 / b.mass);
           b.vx += dx * applied * pushFactor;
           b.vy += dy * applied * pushFactor - 60;
@@ -1068,13 +1082,23 @@
           }
           if (b.y + b.h >= landSurfaceY) {
             b.y = landSurfaceY - b.h;
-            if (Math.abs(b.vy) > 130) {
+            const impact = Math.abs(b.vy);
+            if (impact > 130) {
+              if (impact > 650 && b.kind !== "image") {
+                b.hp -= (impact - 650) * 0.06 * Math.sqrt(b.mass);
+                if (b.hp <= 0) {
+                  this.shatterBody(b, b.x + b.w / 2, b.y + b.h, impact);
+                  continue;
+                }
+              }
               b.vy = -b.vy * 0.32;
               b.vx *= 0.65;
               b.vrot *= 0.5;
             } else {
               b.vy = 0;
               b.settleT += dt;
+              b.rot -= Math.round(b.rot / (Math.PI * 2)) * Math.PI * 2;
+              b.rot += (0 - b.rot) * Math.min(1, dt * 14);
               if (b.settleT > 0.35) {
                 b.settled = true;
                 b.vx = 0;
@@ -3398,6 +3422,8 @@
       this.flashT = 0;
       this.bloomT = 0;
       this.chargeT = 0;
+      this.landT = 0;
+      // landing squash timer
       this.grenadeCd = 0;
       this.throwT = -1;
       this.x = x;
@@ -3424,6 +3450,7 @@
       this.spawnProtect = 1;
       this.flips = 1;
       this.grounded = false;
+      this.landT = 0;
     }
     // --- Collision Helpers ---
     solidAt(world, px, py) {
@@ -3436,6 +3463,20 @@
         if (world.platformAtWorld(this.x + dx, py + 1)) return true;
       }
       return false;
+    }
+    // Thickness (px) of the solid under the feet, capped at 99 — drop-through only for thin ones
+    platformThickness(world) {
+      for (let t = 1; t <= 16; t++) {
+        let any = false;
+        for (const dx of [-6, -3, 0, 3, 6]) {
+          if (this.solidAt(world, this.x + dx, this.y + t)) {
+            any = true;
+            break;
+          }
+        }
+        if (!any) return t;
+      }
+      return 99;
     }
     headSolidAt(world, py) {
       const headY = py - PLAYER_DIMS.height - 1;
@@ -3510,7 +3551,7 @@
       this.coyote = this.grounded ? phys.coyoteTime : Math.max(0, this.coyote - dt);
       if (input.down && this.grounded && this.dropT <= 0) {
         const belowCy = Math.floor((this.y + 3) / CELL);
-        if (belowCy < world.GH - 4) {
+        if (belowCy < world.GH - 4 && this.platformThickness(world) <= 14) {
           this.dropT = 0.25;
           this.grounded = false;
           this.vy = Math.max(this.vy, 160);
@@ -3637,6 +3678,7 @@
             maxStep--;
           }
           if (this.vy > 420 && !oldGrounded) {
+            this.landT = 0.2;
             sound.land(0);
             for (let i = 0; i < 4; i++) {
               world.spawnParticle({
@@ -3791,6 +3833,7 @@
       if (this.flashT > 0) this.flashT -= dt;
       if (this.bloomT > 0) this.bloomT -= dt;
       if (this.chargeT > 0) this.chargeT -= dt;
+      if (this.landT > 0) this.landT -= dt;
     }
     impulse(ix, iy) {
       this.vx += ix;
@@ -4218,7 +4261,8 @@
     ctx.save();
     ctx.translate(x, y);
     if (opts.tumble) ctx.rotate(opts.tumble);
-    ctx.scale(opts.facing * s, s);
+    const sq = opts.squash ?? 0;
+    ctx.scale(opts.facing * s * (1 + sq), s * (1 - sq));
     ctx.lineCap = "round";
     const flip = opts.flipT >= 0 ? opts.flipT * Math.PI * 2 : 0;
     ctx.save();
@@ -4229,25 +4273,27 @@
     ctx.strokeStyle = colors.body;
     ctx.lineWidth = skin === "robot" || skin === "commando" ? 5.5 : 4.5;
     if (opts.grounded && !opts.jetOn) {
+      const idle = opts.runPhase === 0;
+      const sp = idle ? 3.5 : 0;
       const p = Math.sin(opts.runPhase * Math.PI * 2);
       const p2 = Math.sin(opts.runPhase * Math.PI * 2 + Math.PI);
       ctx.beginPath();
       ctx.moveTo(0, hipY);
-      ctx.lineTo(p * 8, hipY + 10);
-      ctx.lineTo(p * 11, 0);
+      ctx.lineTo(p * 8 + sp, hipY + 10);
+      ctx.lineTo(p * 11 + sp, 0);
       ctx.stroke();
       if (skin === "commando" || skin === "robot") {
         ctx.fillStyle = colors.outline;
-        ctx.fillRect(p * 11 - 3, -3, 8, 3.5);
+        ctx.fillRect(p * 11 + sp - 3, -3, 8, 3.5);
       }
       ctx.beginPath();
       ctx.moveTo(0, hipY);
-      ctx.lineTo(p2 * 8, hipY + 10);
-      ctx.lineTo(p2 * 11, 0);
+      ctx.lineTo(p2 * 8 - sp, hipY + 10);
+      ctx.lineTo(p2 * 11 - sp, 0);
       ctx.stroke();
       if (skin === "commando" || skin === "robot") {
         ctx.fillStyle = colors.outline;
-        ctx.fillRect(p2 * 11 - 3, -3, 8, 3.5);
+        ctx.fillRect(p2 * 11 - sp - 3, -3, 8, 3.5);
       }
     } else if (opts.jetOn) {
       ctx.beginPath();
@@ -4403,7 +4449,7 @@
     ctx.save();
     ctx.translate(0, -34);
     const aimLocal = opts.facing === 1 ? opts.aim : Math.PI - opts.aim;
-    ctx.rotate(aimLocal);
+    ctx.rotate(aimLocal + (1 - Math.min(1, opts.switchT ?? 1)) * 0.9);
     const handX = 9;
     const handY = 1;
     ctx.strokeStyle = colors.accent;
@@ -4528,7 +4574,8 @@
       }
       case "rail": {
         const maxD = 3e3;
-        const step = CELL * 0.8;
+        const step = 2;
+        const seenRail = /* @__PURE__ */ new Set();
         let cx = mzX;
         let cy = mzY;
         const hitPts = [];
@@ -4538,6 +4585,11 @@
           cy += trueSin * step;
           if (cx < 0 || cx > world.W || cy > world.H) break;
           if (world.solidAtWorld(cx, cy)) {
+            const rb = world.findBodyAt(cx, cy);
+            if (rb) {
+              if (seenRail.has(rb.id)) continue;
+              seenRail.add(rb.id);
+            }
             hitPts.push({ x: cx, y: cy });
             world.hitBodyAt(cx, cy, effDmg, trueCos * 340, trueSin * 340);
             if (hitPts.length % 2 === 1) {
@@ -5598,6 +5650,16 @@
           break;
       }
     }
+    // Window lost focus: release all active inputs to prevent keys sticking
+    onBlur() {
+      this.keysDown.clear();
+      this.input.left = false;
+      this.input.right = false;
+      this.input.jump = false;
+      this.input.down = false;
+      this.input.fire = false;
+      this.input.alt = false;
+    }
     selectWeapon(n) {
       if (!this.player || n === this.player.weaponIdx || n < 0 || n >= WEAPONS.length) return;
       this.player.weaponIdx = n;
@@ -5891,6 +5953,8 @@
         weapon: icon,
         weaponAnchor: wa,
         jetK: p.jetK,
+        squash: p.landT > 0 ? Math.sin(p.landT / 0.2 * Math.PI) * 0.12 : 0,
+        switchT: p.switchT,
         skin: charCfg.skin,
         colors: {
           head: charCfg.headColor,
@@ -5900,6 +5964,12 @@
           thruster: charCfg.thrusterColor
         }
       });
+      if (p.jetFuel < 0.999) {
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(kx - 13, ky - 66, 26, 4);
+        ctx.fillStyle = p.jetFuel < 0.25 ? "#f2561d" : "#ffd23d";
+        ctx.fillRect(kx - 12, ky - 65, 24 * p.jetFuel, 2);
+      }
       world.drawParticles(ctx, camX, camY);
       const mx = this.clientMouseX;
       const my = this.clientMouseY;
@@ -6480,6 +6550,7 @@
     const shadow = host.attachShadow({ mode: "open" });
     document.documentElement.appendChild(host);
     jahdarHostEl = host;
+    document.activeElement?.blur?.();
     const styleEl = document.createElement("style");
     styleEl.textContent = `
     * {
@@ -7060,7 +7131,11 @@
       };
       window.addEventListener("resize", onResize);
       windowListeners.push({ type: "resize", handler: onResize });
+      const swallow = (e) => {
+        if (!(e.altKey && e.shiftKey) && !e.ctrlKey && !e.metaKey) e.stopImmediatePropagation();
+      };
       const onKeyDown = (e) => {
+        swallow(e);
         if (e.key === "Escape") {
           teardownJahdar();
           return;
@@ -7080,12 +7155,16 @@
         engine.onKey(e, true);
       };
       const onKeyUp = (e) => {
+        swallow(e);
         engine.onKey(e, false);
       };
-      window.addEventListener("keydown", onKeyDown);
-      window.addEventListener("keyup", onKeyUp);
-      windowListeners.push({ type: "keydown", handler: onKeyDown });
-      windowListeners.push({ type: "keyup", handler: onKeyUp });
+      window.addEventListener("keydown", onKeyDown, true);
+      window.addEventListener("keyup", onKeyUp, true);
+      windowListeners.push({ type: "keydown", handler: onKeyDown, opts: true });
+      windowListeners.push({ type: "keyup", handler: onKeyUp, opts: true });
+      const onBlur = () => engine.onBlur();
+      window.addEventListener("blur", onBlur);
+      windowListeners.push({ type: "blur", handler: onBlur });
       canvas.addEventListener("mousemove", (e) => {
         engine.onMouseMove(e.clientX, e.clientY);
       });

@@ -325,6 +325,17 @@ export class DestroyEngine {
     }
   }
 
+  // Window lost focus: release all active inputs to prevent keys sticking
+  onBlur() {
+    this.keysDown.clear()
+    this.input.left = false
+    this.input.right = false
+    this.input.jump = false
+    this.input.down = false
+    this.input.fire = false
+    this.input.alt = false
+  }
+
   selectWeapon(n: number) {
     if (!this.player || n === this.player.weaponIdx || n < 0 || n >= WEAPONS.length) return
     this.player.weaponIdx = n
@@ -681,6 +692,8 @@ export class DestroyEngine {
       weapon: icon,
       weaponAnchor: wa,
       jetK: p.jetK,
+      squash: p.landT > 0 ? Math.sin((p.landT / 0.2) * Math.PI) * 0.12 : 0,
+      switchT: p.switchT,
       skin: charCfg.skin,
       colors: {
         head: charCfg.headColor,
@@ -690,6 +703,14 @@ export class DestroyEngine {
         thruster: charCfg.thrusterColor,
       },
     })
+
+    // Jetpack fuel gauge above head when discharging
+    if (p.jetFuel < 0.999) {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      ctx.fillRect(kx - 13, ky - 66, 26, 4)
+      ctx.fillStyle = p.jetFuel < 0.25 ? '#f2561d' : '#ffd23d'
+      ctx.fillRect(kx - 12, ky - 65, 24 * p.jetFuel, 2)
+    }
 
     // particles on top
     world.drawParticles(ctx, camX, camY)

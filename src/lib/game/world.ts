@@ -668,6 +668,19 @@ export class World {
     }
   }
 
+  // Settled debris can be woken back up by blast impulses, explosions, or gravity wells
+  wakeBody(b: SolidBody) {
+    if (!b.settled || b.destroyed) return
+    b.settled = false
+    b.settleT = 0
+    const at = this.settledBodies.indexOf(b)
+    if (at >= 0) {
+      const last = this.settledBodies.pop()!
+      if (at < this.settledBodies.length) this.settledBodies[at] = last
+    }
+    if (!this.dynamicBodies.includes(b)) this.dynamicBodies.push(b)
+  }
+
   // Fracture and shatter a body into vector shards
   shatterBody(b: SolidBody, hitX: number, hitY: number, force = 380) {
     if (b.destroyed) return
@@ -814,6 +827,7 @@ export class World {
         if (b.anchored && (b.hp <= hpDislodgeThresh || blastImpulse >= impulseDislodgeThresh)) {
           this.dislodgeBody(b, dx * blastImpulse, dy * blastImpulse - 120)
         } else if (!b.anchored) {
+          this.wakeBody(b)
           const pushFactor = Math.min(12, 180 / b.mass)
           b.vx += dx * blastImpulse * pushFactor
           b.vy += (dy * blastImpulse - 120) * pushFactor
@@ -868,6 +882,7 @@ export class World {
       } else if (b.anchored) {
         this.dislodgeBody(b, dx * applied, dy * applied - 100)
       } else {
+        this.wakeBody(b)
         const pushFactor = Math.min(12, 180 / b.mass)
         b.vx += dx * applied * pushFactor
         b.vy += dy * applied * pushFactor - 60
@@ -1048,13 +1063,25 @@ export class World {
         // Collision with floor or settled body
         if (b.y + b.h >= landSurfaceY) {
           b.y = landSurfaceY - b.h
-          if (Math.abs(b.vy) > 130) {
+          const impact = Math.abs(b.vy)
+          if (impact > 130) {
+            // High-velocity impact damage from hard drops
+            if (impact > 650 && b.kind !== 'image') {
+              b.hp -= (impact - 650) * 0.06 * Math.sqrt(b.mass)
+              if (b.hp <= 0) {
+                this.shatterBody(b, b.x + b.w / 2, b.y + b.h, impact)
+                continue
+              }
+            }
             b.vy = -b.vy * 0.32
             b.vx *= 0.65
             b.vrot *= 0.5
           } else {
             b.vy = 0
             b.settleT += dt
+            // Smooth ease-to-flat rotation instead of abrupt snapping pop
+            b.rot -= Math.round(b.rot / (Math.PI * 2)) * Math.PI * 2
+            b.rot += (0 - b.rot) * Math.min(1, dt * 14)
             if (b.settleT > 0.35) {
               b.settled = true
               b.vx = 0

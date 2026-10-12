@@ -240,7 +240,8 @@ export function fireWeapon(
     case 'rail': {
       // instant piercing beam directly along the true target ray
       const maxD = 3000
-      const step = CELL * 0.8
+      const step = 2
+      const seenRail = new Set<number>()
       let cx = mzX
       let cy = mzY
       const hitPts: { x: number; y: number }[] = []
@@ -250,6 +251,11 @@ export function fireWeapon(
         cy += trueSin * step
         if (cx < 0 || cx > world.W || cy > world.H) break
         if (world.solidAtWorld(cx, cy)) {
+          const rb = world.findBodyAt(cx, cy)
+          if (rb) {
+            if (seenRail.has(rb.id)) continue
+            seenRail.add(rb.id)
+          }
           hitPts.push({ x: cx, y: cy })
           world.hitBodyAt(cx, cy, effDmg, trueCos * 340, trueSin * 340)
           // carve & blast

@@ -78,6 +78,7 @@ async function launchJahdar() {
   const shadow = host.attachShadow({ mode: 'open' })
   document.documentElement.appendChild(host)
   jahdarHostEl = host
+  ;(document.activeElement as HTMLElement | null)?.blur?.() // don't type into a page field while playing
 
   // Inject Styles into Shadow DOM
   const styleEl = document.createElement('style')
@@ -696,7 +697,13 @@ async function launchJahdar() {
     window.addEventListener('resize', onResize)
     windowListeners.push({ type: 'resize', handler: onResize })
 
+    // Capture phase + stopImmediatePropagation: page shortcuts (YouTube space/K, Gmail, GitHub, etc.)
+    // must not fire while Jahdar owns keyboard controls
+    const swallow = (e: KeyboardEvent) => {
+      if (!(e.altKey && e.shiftKey) && !e.ctrlKey && !e.metaKey) e.stopImmediatePropagation()
+    }
     const onKeyDown = (e: KeyboardEvent) => {
+      swallow(e)
       if (e.key === 'Escape') {
         teardownJahdar()
         return
@@ -716,12 +723,16 @@ async function launchJahdar() {
       engine.onKey(e, true)
     }
     const onKeyUp = (e: KeyboardEvent) => {
+      swallow(e)
       engine.onKey(e, false)
     }
-    window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('keyup', onKeyUp)
-    windowListeners.push({ type: 'keydown', handler: onKeyDown })
-    windowListeners.push({ type: 'keyup', handler: onKeyUp })
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    windowListeners.push({ type: 'keydown', handler: onKeyDown, opts: true })
+    windowListeners.push({ type: 'keyup', handler: onKeyUp, opts: true })
+    const onBlur = () => engine.onBlur()
+    window.addEventListener('blur', onBlur)
+    windowListeners.push({ type: 'blur', handler: onBlur })
 
     canvas.addEventListener('mousemove', (e) => {
       engine.onMouseMove(e.clientX, e.clientY)

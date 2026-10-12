@@ -85,6 +85,7 @@ export class Player {
   flashT = 0
   bloomT = 0
   chargeT = 0
+  landT = 0 // landing squash timer
 
   grenadeCd = 0
   throwT = -1
@@ -117,6 +118,7 @@ export class Player {
     this.spawnProtect = 1
     this.flips = 1
     this.grounded = false
+    this.landT = 0
   }
 
   // --- Collision Helpers ---
@@ -131,6 +133,21 @@ export class Player {
       if (world.platformAtWorld(this.x + dx, py + 1)) return true
     }
     return false
+  }
+
+  // Thickness (px) of the solid under the feet, capped at 99 — drop-through only for thin ones
+  private platformThickness(world: World): number {
+    for (let t = 1; t <= 16; t++) {
+      let any = false
+      for (const dx of [-6, -3, 0, 3, 6]) {
+        if (this.solidAt(world, this.x + dx, this.y + t)) {
+          any = true
+          break
+        }
+      }
+      if (!any) return t
+    }
+    return 99
   }
 
   private headSolidAt(world: World, py: number): boolean {
@@ -226,8 +243,8 @@ export class Player {
     // Platform Drop-through (S / Down Arrow)
     if (input.down && this.grounded && this.dropT <= 0) {
       const belowCy = Math.floor((this.y + 3) / CELL)
-      // Only drop if not at bedrock bottom
-      if (belowCy < world.GH - 4) {
+      // Only drop if not at bedrock bottom and platform is thin enough
+      if (belowCy < world.GH - 4 && this.platformThickness(world) <= 14) {
         this.dropT = 0.25
         this.grounded = false
         this.vy = Math.max(this.vy, 160)
@@ -379,6 +396,7 @@ export class Player {
         }
 
         if (this.vy > 420 && !oldGrounded) {
+          this.landT = 0.2
           sound.land(0)
           // Landing impact dust
           for (let i = 0; i < 4; i++) {
@@ -565,6 +583,7 @@ export class Player {
     if (this.flashT > 0) this.flashT -= dt
     if (this.bloomT > 0) this.bloomT -= dt
     if (this.chargeT > 0) this.chargeT -= dt
+    if (this.landT > 0) this.landT -= dt
   }
 
   impulse(ix: number, iy: number) {
