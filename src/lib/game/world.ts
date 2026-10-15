@@ -1255,6 +1255,24 @@ export class World {
       p.x += p.vx * dt
       p.y += p.vy * dt
       if (p.rot !== undefined && p.vrot) p.rot += p.vrot * dt
+
+      // Realistic shell casing bounce and settle
+      if (p.kind === 'shell') {
+        const floorY = this.H - 28
+        if (p.y >= floorY || (p.vy > 0 && this.solidAtWorld(p.x, p.y))) {
+          if (p.y >= floorY) p.y = floorY - 1
+          if (p.vy > 50) {
+            p.vy = -p.vy * 0.45
+            p.vx *= 0.65
+            if (p.vrot) p.vrot = -p.vrot * 0.5
+          } else {
+            p.vy = 0
+            p.vx *= 0.5
+            p.grav = 0
+            if (p.vrot) p.vrot = 0
+          }
+        }
+      }
     }
   }
 

@@ -135,8 +135,34 @@ export class Player {
     return false
   }
 
-  // Thickness (px) of the solid under the feet, capped at 99 — drop-through only for thin ones
+  // Thickness (px) of the solid or platform under the feet, capped at 99 — drop-through only for thin ones
   private platformThickness(world: World): number {
+    // If on a one-way box platform, thickness is the ledge itself (5px)
+    let onBoxPlatform = false
+    for (const dx of [-6, -3, 0, 3, 6]) {
+      if (world.platformAtWorld(this.x + dx, this.y + 1)) {
+        onBoxPlatform = true
+        break
+      }
+    }
+    if (onBoxPlatform) {
+      // Check if there is ALSO a thick solid body directly below
+      let solidThickness = 0
+      for (let t = 1; t <= 16; t++) {
+        let anySolid = false
+        for (const dx of [-6, -3, 0, 3, 6]) {
+          if (this.solidAt(world, this.x + dx, this.y + t)) {
+            anySolid = true
+            break
+          }
+        }
+        if (anySolid) solidThickness = t
+        else if (solidThickness > 0) break
+      }
+      return solidThickness > 14 ? solidThickness : 5
+    }
+
+    // Otherwise check solid bodies/voxels thickness
     for (let t = 1; t <= 16; t++) {
       let any = false
       for (const dx of [-6, -3, 0, 3, 6]) {
@@ -242,13 +268,13 @@ export class Player {
 
     // Platform Drop-through (S / Down Arrow)
     if (input.down && this.grounded && this.dropT <= 0) {
-      const belowCy = Math.floor((this.y + 3) / CELL)
+      const belowCy = Math.floor((this.y + 8) / CELL)
       // Only drop if not at bedrock bottom and platform is thin enough
       if (belowCy < world.GH - 4 && this.platformThickness(world) <= 14) {
-        this.dropT = 0.25
+        this.dropT = 0.28
         this.grounded = false
-        this.vy = Math.max(this.vy, 160)
-        this.y += 3
+        this.vy = Math.max(this.vy, 180)
+        this.y += 8
       }
     }
 
@@ -579,6 +605,7 @@ export class Player {
 
     if (this.cooldown > 0) this.cooldown -= dt
     if (this.grenadeCd > 0) this.grenadeCd -= dt
+    if (this.throwT > 0) this.throwT -= dt
     if (this.switchT < 1) this.switchT += dt * 5
     if (this.flashT > 0) this.flashT -= dt
     if (this.bloomT > 0) this.bloomT -= dt

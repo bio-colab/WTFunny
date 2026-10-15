@@ -457,12 +457,16 @@ export type CharacterDrawOpts = {
   flipT: number
   tumble: number
   vy: number
+  vx?: number
   aim: number
   weapon?: HTMLCanvasElement | null
   weaponAnchor?: { dx: number; dy: number } | null
   jetK: number
   squash?: number // landing squash & stretch (0..~0.12)
   switchT?: number // weapon-swap progress 0..1
+  skidT?: number // sliding / braking progress
+  throwT?: number // grenade throwing animation progress
+  bloomT?: number // muzzle flash / bloom intensity
   scale?: number
   skin?: CharacterSkin
   colors?: {
@@ -503,36 +507,113 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
 
   const hipY = -22
 
+  // ---- 0. DYNAMIC FLUTTERING SCARF / CAPE (Jahdar & Knights) ----
+  if (skin !== 'robot') {
+    const localVx = (opts.vx ?? 0) * opts.facing
+    const blowBack = -10 - Math.min(18, Math.max(0, localVx * 0.04))
+    const lift = (opts.vy < 0 ? 5 : -4) + (opts.jetOn ? 12 : 0)
+    const time = Date.now() * 0.009
+    const w1 = Math.sin(time * 1.3 + (opts.runPhase ?? 0) * Math.PI) * 2.5
+    const w2 = Math.cos(time * 1.6 + 1.2) * 3.5
+    const w3 = Math.sin(time * 2.2 + 2.5) * 4.5
+
+    ctx.save()
+    // Dual-tone fluttering cape
+    ctx.fillStyle = colors.accent
+    ctx.beginPath()
+    ctx.moveTo(0, -36) // neck anchor
+    ctx.quadraticCurveTo(blowBack * 0.45, -34 + lift * 0.35 + w1, blowBack * 0.8, -26 + lift * 0.7 + w2)
+    ctx.lineTo(blowBack - 6, -18 + lift + w3) // tip
+    ctx.lineTo(blowBack - 3, -12 + lift + w3) // bottom tip
+    ctx.quadraticCurveTo(blowBack * 0.45, -24 + lift * 0.35 + w1, 0, -31) // waist anchor
+    ctx.closePath()
+    ctx.fill()
+
+    // Royal golden trim along bottom trailing hem
+    ctx.strokeStyle = colors.thruster || '#fbbf24'
+    ctx.lineWidth = 1.4
+    ctx.beginPath()
+    ctx.moveTo(blowBack * 0.5, -23 + lift * 0.45 + w1)
+    ctx.lineTo(blowBack - 3, -12 + lift + w3)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // Knight's sheathed broadsword on back (for Jahdar / Custom)
+  if (skin === 'stickman' || skin === 'custom') {
+    ctx.save()
+    ctx.strokeStyle = '#1e293b'
+    ctx.lineWidth = 2.4
+    ctx.beginPath()
+    ctx.moveTo(-4, -38)
+    ctx.lineTo(-12, -22)
+    ctx.stroke()
+    // Gold crossguard
+    ctx.strokeStyle = '#fbbf24'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(-7, -39)
+    ctx.lineTo(-2, -37)
+    ctx.stroke()
+    // Pommel
+    ctx.fillStyle = '#fbbf24'
+    ctx.beginPath()
+    ctx.arc(-2, -42, 1.4, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
   // ---- 1. LEGS ----
   ctx.strokeStyle = colors.body
   ctx.lineWidth = skin === 'robot' || skin === 'commando' ? 5.5 : 4.5
 
   if (opts.grounded && !opts.jetOn) {
-    const idle = opts.runPhase === 0 // standing: legs used to overlap into a single line
-    const sp = idle ? 3.5 : 0
-    const p = Math.sin(opts.runPhase * Math.PI * 2)
-    const p2 = Math.sin(opts.runPhase * Math.PI * 2 + Math.PI)
-    // Leg 1
-    ctx.beginPath()
-    ctx.moveTo(0, hipY)
-    ctx.lineTo(p * 8 + sp, hipY + 10)
-    ctx.lineTo(p * 11 + sp, 0)
-    ctx.stroke()
-    // Foot/Boot
-    if (skin === 'commando' || skin === 'robot') {
-      ctx.fillStyle = colors.outline
-      ctx.fillRect(p * 11 + sp - 3, -3, 8, 3.5)
-    }
+    if (opts.skidT && opts.skidT > 0) {
+      // High-traction braking skid pose
+      ctx.beginPath()
+      ctx.moveTo(0, hipY)
+      ctx.lineTo(7, hipY + 11)
+      ctx.lineTo(13, 0)
+      ctx.stroke()
 
-    // Leg 2
-    ctx.beginPath()
-    ctx.moveTo(0, hipY)
-    ctx.lineTo(p2 * 8 - sp, hipY + 10)
-    ctx.lineTo(p2 * 11 - sp, 0)
-    ctx.stroke()
-    if (skin === 'commando' || skin === 'robot') {
-      ctx.fillStyle = colors.outline
-      ctx.fillRect(p2 * 11 - sp - 3, -3, 8, 3.5)
+      ctx.beginPath()
+      ctx.moveTo(0, hipY)
+      ctx.lineTo(-6, hipY + 12)
+      ctx.lineTo(-4, 0)
+      ctx.stroke()
+
+      if (skin === 'commando' || skin === 'robot') {
+        ctx.fillStyle = colors.outline
+        ctx.fillRect(10, -3, 8, 3.5)
+        ctx.fillRect(-7, -3, 8, 3.5)
+      }
+    } else {
+      const idle = opts.runPhase === 0 // standing: legs used to overlap into a single line
+      const sp = idle ? 3.5 : 0
+      const p = Math.sin(opts.runPhase * Math.PI * 2)
+      const p2 = Math.sin(opts.runPhase * Math.PI * 2 + Math.PI)
+      // Leg 1
+      ctx.beginPath()
+      ctx.moveTo(0, hipY)
+      ctx.lineTo(p * 8 + sp, hipY + 10)
+      ctx.lineTo(p * 11 + sp, 0)
+      ctx.stroke()
+      // Foot/Boot
+      if (skin === 'commando' || skin === 'robot') {
+        ctx.fillStyle = colors.outline
+        ctx.fillRect(p * 11 + sp - 3, -3, 8, 3.5)
+      }
+
+      // Leg 2
+      ctx.beginPath()
+      ctx.moveTo(0, hipY)
+      ctx.lineTo(p2 * 8 - sp, hipY + 10)
+      ctx.lineTo(p2 * 11 - sp, 0)
+      ctx.stroke()
+      if (skin === 'commando' || skin === 'robot') {
+        ctx.fillStyle = colors.outline
+        ctx.fillRect(p2 * 11 - sp - 3, -3, 8, 3.5)
+      }
     }
   } else if (opts.jetOn) {
     ctx.beginPath()
@@ -608,12 +689,19 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
     ctx.lineTo(0, hipY)
     ctx.stroke()
   } else {
-    // Classic Stickman / Custom
+    // Cyber-Knight Jahdar ("الفارس الصغير") / Custom
+    const skidTilt = opts.skidT && opts.skidT > 0 ? -(opts.skidT / 0.12) * 0.18 : 0
     ctx.lineWidth = 4.5
     ctx.beginPath()
     ctx.moveTo(0, hipY)
-    ctx.lineTo(0, -38)
+    ctx.lineTo(skidTilt * 20, -38)
     ctx.stroke()
+
+    // Gilded breastplate pauldron / knight crest
+    ctx.fillStyle = colors.accent
+    ctx.fillRect(-4 + skidTilt * 14, -37, 8, 5)
+    ctx.fillStyle = '#fbbf24'
+    ctx.fillRect(-3 + skidTilt * 14, -35, 6, 1.5)
   }
 
   // ---- 3. JETPACK ON BACK ----
@@ -703,14 +791,68 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
     ctx.fillRect(-2, -45, 1.8, 1.8)
     ctx.fillRect(1, -45, 1.8, 1.8)
   } else {
-    // Classic Stickman / Custom
+    // Cyber-Knight Jahdar ("الفارس الصغير") / Custom
+    const skidTilt = opts.skidT && opts.skidT > 0 ? -(opts.skidT / 0.12) * 0.18 : 0
+    const headTiltX = skidTilt * 22
+
+    // 1. Sleek Head Base
     ctx.fillStyle = colors.head
     ctx.beginPath()
-    ctx.arc(0, -45, 7, 0, Math.PI * 2)
+    ctx.arc(headTiltX, -45, 7.5, 0, Math.PI * 2)
     ctx.fill()
+
+    // 2. Gilded Cyber-Knight Headband / Circlet
+    ctx.fillStyle = '#fbbf24'
+    ctx.fillRect(headTiltX - 7.5, -48, 15, 3)
+    ctx.fillStyle = '#f59e0b'
+    ctx.fillRect(headTiltX - 7.5, -45.5, 15, 0.8)
+
+    // Center Knight Crest / Gem
+    ctx.fillStyle = '#fbbf24'
+    ctx.beginPath()
+    ctx.moveTo(headTiltX, -51)
+    ctx.lineTo(headTiltX + 2.5, -48)
+    ctx.lineTo(headTiltX, -46)
+    ctx.lineTo(headTiltX - 2.5, -48)
+    ctx.closePath()
+    ctx.fill()
+    ctx.fillStyle = '#38bdf8'
+    ctx.beginPath()
+    ctx.arc(headTiltX, -48, 1.1, 0, Math.PI * 2)
+    ctx.fill()
+
+    // 3. Glowing Cybernetic Eye / Visor (Looking forward)
+    ctx.fillStyle = '#38bdf8'
+    ctx.beginPath()
+    ctx.roundRect(headTiltX + 1.5, -46.2, 4.8, 2.4, 1)
+    ctx.fill()
+    // Specular eye highlight
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(headTiltX + 3.8, -45.8, 2, 1.3)
   }
 
   ctx.restore() // End flip transform
+
+  // Grenade throwing off-arm animation (when throwT > 0)
+  if (opts.throwT && opts.throwT > 0) {
+    const tp = 1 - Math.max(0, opts.throwT / 0.22)
+    const armAngle = -Math.PI * 0.55 + tp * Math.PI * 1.05
+    const throwHandX = Math.cos(armAngle) * 15
+    const throwHandY = -34 + Math.sin(armAngle) * 15
+
+    ctx.save()
+    ctx.strokeStyle = colors.accent
+    ctx.lineWidth = 3.5
+    ctx.beginPath()
+    ctx.moveTo(0, -34)
+    ctx.lineTo(throwHandX, throwHandY)
+    ctx.stroke()
+    ctx.fillStyle = '#38bdf8'
+    ctx.beginPath()
+    ctx.arc(throwHandX, throwHandY, 2.8, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
 
   // ---- 5. ARMS & WEAPON ----
   ctx.save()
@@ -735,6 +877,41 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, x: number, y: numbe
     ctx.save()
     ctx.translate(handX, handY)
     ctx.drawImage(opts.weapon, -wa.dx, -wa.dy)
+    ctx.restore()
+  }
+
+  // Muzzle Bloom / Radiant Flare at weapon tip
+  if (opts.bloomT && opts.bloomT > 0) {
+    const wa = opts.weaponAnchor
+    const barrelW = opts.weapon ? opts.weapon.width - (wa?.dx ?? 6) + 4 : 22
+    const mzX = handX + barrelW
+    const mzY = handY
+    const bk = Math.min(1, opts.bloomT / 0.1)
+
+    ctx.save()
+    // Radiant outer flash bloom
+    const grad = ctx.createRadialGradient(mzX, mzY, 1, mzX, mzY, 20 * bk)
+    grad.addColorStop(0, 'rgba(255, 250, 200, ' + (0.95 * bk) + ')')
+    grad.addColorStop(0.35, 'rgba(251, 191, 36, ' + (0.7 * bk) + ')')
+    grad.addColorStop(1, 'rgba(245, 158, 11, 0)')
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    ctx.arc(mzX, mzY, 20 * bk, 0, Math.PI * 2)
+    ctx.fill()
+
+    // 4-point diamond muzzle flare
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.moveTo(mzX + 15 * bk, mzY)
+    ctx.lineTo(mzX + 2.5 * bk, mzY + 3.5 * bk)
+    ctx.lineTo(mzX, mzY + 11 * bk)
+    ctx.lineTo(mzX - 2.5 * bk, mzY + 3.5 * bk)
+    ctx.lineTo(mzX - 9 * bk, mzY)
+    ctx.lineTo(mzX - 2.5 * bk, mzY - 3.5 * bk)
+    ctx.lineTo(mzX, mzY - 11 * bk)
+    ctx.lineTo(mzX + 2.5 * bk, mzY - 3.5 * bk)
+    ctx.closePath()
+    ctx.fill()
     ctx.restore()
   }
 

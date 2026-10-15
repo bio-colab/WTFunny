@@ -105,6 +105,7 @@ export class DestroyEngine {
   private clientMouseX = 0
   private clientMouseY = 0
   private hitStopTimer = 0
+  private trailSpawnTimer = 0
   private backdropCanvas: HTMLCanvasElement | null = null
 
   cb: EngineCallbacks
@@ -516,6 +517,7 @@ export class DestroyEngine {
           () => {
             p.shots++
             p.flashT = 0.06
+            p.bloomT = 0.1
             p.kickRotV -= w.kick * 0.35
           },
           this.input.aimX,
@@ -553,6 +555,7 @@ export class DestroyEngine {
           this.input.aimY
         )
         p.grenadeCd = GRENADE.cooldown
+        p.throwT = 0.22
       }
       this.input.alt = false
     }
@@ -576,6 +579,82 @@ export class DestroyEngine {
         sound.shot('drone', 0.5, 0)
         d.battery -= 0.12
         p.shots++
+      }
+    }
+
+    // Player trail particles based on ConfigManager character.trail
+    const charCfg = ConfigManager.get().getConfig().character
+    const pSpeed = Math.hypot(p.vx, p.vy)
+    const isMovingFast = pSpeed > 220
+    const isSpecialAction = p.jetOn || p.flipT >= 0 || (p.skidT && p.skidT > 0)
+
+    if (isMovingFast || isSpecialAction) {
+      this.trailSpawnTimer -= dt
+      if (this.trailSpawnTimer <= 0) {
+        this.trailSpawnTimer = p.jetOn ? 0.025 : 0.04
+        const trailType = charCfg.trail ?? 'sparks'
+        const spawnX = p.x - p.facing * 8 + (Math.random() - 0.5) * 6
+        const spawnY = p.y - 20 + (Math.random() - 0.5) * 12
+
+        switch (trailType) {
+          case 'sparks': {
+            world.spawnParticle({
+              x: spawnX,
+              y: spawnY,
+              vx: -p.vx * 0.2 + (Math.random() - 0.5) * 60,
+              vy: -p.vy * 0.2 + (Math.random() - 0.5) * 60,
+              life: 0.35,
+              max: 0.35,
+              kind: 'spark',
+              color: Math.random() < 0.5 ? '#fbbf24' : '#ffd23d',
+              size: 2 + Math.random() * 2,
+            })
+            break
+          }
+          case 'smoke': {
+            world.spawnParticle({
+              x: spawnX,
+              y: spawnY,
+              vx: -p.vx * 0.15 + (Math.random() - 0.5) * 30,
+              vy: -20 + (Math.random() - 0.5) * 30,
+              life: 0.4,
+              max: 0.4,
+              kind: 'smoke',
+              color: 'rgba(148, 163, 184, 0.5)',
+              size: 3 + Math.random() * 3,
+            })
+            break
+          }
+          case 'void': {
+            world.spawnParticle({
+              x: spawnX,
+              y: spawnY,
+              vx: -p.vx * 0.1 + (Math.random() - 0.5) * 40,
+              vy: -p.vy * 0.1 + (Math.random() - 0.5) * 40,
+              life: 0.35,
+              max: 0.35,
+              kind: 'spark',
+              color: Math.random() < 0.6 ? '#a855f7' : '#06b6d4',
+              size: 2.5 + Math.random() * 2,
+            })
+            break
+          }
+          case 'rainbow': {
+            const hue = (Date.now() * 0.4) % 360
+            world.spawnParticle({
+              x: spawnX,
+              y: spawnY,
+              vx: -p.vx * 0.2 + (Math.random() - 0.5) * 50,
+              vy: -p.vy * 0.2 + (Math.random() - 0.5) * 50,
+              life: 0.4,
+              max: 0.4,
+              kind: 'spark',
+              color: `hsl(${hue}, 100%, 65%)`,
+              size: 2.5 + Math.random() * 2,
+            })
+            break
+          }
+        }
       }
     }
 
@@ -735,12 +814,16 @@ export class DestroyEngine {
       flipT: p.flipT,
       tumble: p.tumble,
       vy: p.vy,
+      vx: p.vx,
       aim: p.aim + (p.facing === 1 ? p.kickRot : -p.kickRot),
       weapon: icon,
       weaponAnchor: wa,
       jetK: p.jetK,
       squash: p.landT > 0 ? Math.sin((p.landT / 0.2) * Math.PI) * 0.12 : 0,
       switchT: p.switchT,
+      skidT: p.skidT,
+      throwT: p.throwT,
+      bloomT: p.bloomT,
       skin: charCfg.skin,
       colors: {
         head: charCfg.headColor,

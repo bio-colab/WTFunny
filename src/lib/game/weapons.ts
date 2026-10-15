@@ -207,7 +207,7 @@ export function fireWeapon(
         world.spawnParticle({ x: mzX, y: mzY, vx: trueCos * 300 + (Math.random() - 0.5) * 200, vy: trueSin * 300 + (Math.random() - 0.5) * 200, life: 0.1, max: 0.1, kind: 'spark', color: '#fff3a6', size: 3 })
       }
       // shell eject
-      world.spawnParticle({ x: x + cos * 10, y: y + sin * 10, vx: -cos * 100 + (Math.random() - 0.5) * 60, vy: -260 - Math.random() * 120, life: 1, max: 1, kind: 'shell', color: '#e9b54a', size: 2.5, grav: 1900, rot: Math.random() * 6, vrot: 12 })
+      world.spawnParticle({ x: x + cos * 10, y: y + sin * 10, vx: -cos * 100 + (Math.random() - 0.5) * 60, vy: -260 - Math.random() * 120, life: 1.8, max: 1.8, kind: 'shell', color: '#e9b54a', size: 2.5, grav: 1900, rot: Math.random() * 6, vrot: 12 })
       onShake(effShake)
       if (w.push > 0) onKick(-trueCos * w.push, -trueSin * w.push * 0.4)
       if (w.kick > 0) onKick(0, 0)

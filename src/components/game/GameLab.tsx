@@ -131,6 +131,7 @@ export default function GameLab({ open, onClose, onPlayMap }: GameLabProps) {
         flipT,
         tumble: 0,
         vy,
+        vx: isRunning ? 260 : 0,
         aim: 0,
         weapon: currentWeaponIcon,
         weaponAnchor: wa,
