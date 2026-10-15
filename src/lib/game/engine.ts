@@ -181,7 +181,7 @@ export class DestroyEngine {
       // Impact hit-stop for visceral combat feedback on heavy destruction
       if (b.mass > 350 || force > 450) {
         this.hitStopTimer = Math.min(0.035, 0.015 + b.mass / 35000)
-        this.shake = Math.max(this.shake, Math.min(10, 3 + force / 90))
+        this.shake = Math.max(this.shake, Math.min(1.2, 0.25 + force / 2500))
       }
     }
     this.world.onPortalShatter = (_wx, _wy) => {
@@ -438,8 +438,9 @@ export class DestroyEngine {
     if (this.hitStopTimer > 0) {
       this.hitStopTimer -= dt
       if (this.shake > 0) {
-        this.shakeX = (Math.random() - 0.5) * this.shake * 34
-        this.shakeY = (Math.random() - 0.5) * this.shake * 34
+        const maxShakePx = Math.min(18, this.shake * 22)
+        this.shakeX = (Math.random() - 0.5) * 2 * maxShakePx
+        this.shakeY = (Math.random() - 0.5) * 2 * maxShakePx
       }
       this.render()
       return
@@ -688,9 +689,10 @@ export class DestroyEngine {
 
     // shake
     if (this.shake > 0) {
-      this.shake = Math.max(0, this.shake - dt * 2.2)
-      this.shakeX = (Math.random() - 0.5) * this.shake * 34
-      this.shakeY = (Math.random() - 0.5) * this.shake * 34
+      this.shake = Math.max(0, this.shake - dt * 6.5)
+      const maxShakePx = Math.min(18, this.shake * 22)
+      this.shakeX = (Math.random() - 0.5) * 2 * maxShakePx
+      this.shakeY = (Math.random() - 0.5) * 2 * maxShakePx
     } else {
       this.shakeX = 0
       this.shakeY = 0

@@ -662,7 +662,10 @@ export class World {
       const pushFactor = Math.min(12, 180 / b.mass)
       b.vx += impulseX * pushFactor
       b.vy += impulseY * pushFactor
-      b.vrot += (Math.random() - 0.5) * 4
+      const rotInertia = Math.max(1, (b.mass / 50) + ((b.w * b.w + b.h * b.h) / 20000))
+      const deltaVrot = ((Math.random() - 0.5) * 3) / rotInertia
+      const maxVrot = Math.max(0.6, 5 / Math.sqrt(rotInertia))
+      b.vrot = Math.max(-maxVrot, Math.min(maxVrot, b.vrot + deltaVrot))
     }
 
     if (b.hp <= 0) {
@@ -681,7 +684,9 @@ export class World {
     const pushFactor = Math.min(14, 220 / b.mass)
     b.vx = impulseX * pushFactor + (Math.random() - 0.5) * 80
     b.vy = impulseY * pushFactor - 80 - Math.random() * 120
-    b.vrot = (Math.random() - 0.5) * 8
+    const rotInertia = Math.max(1, (b.mass / 50) + ((b.w * b.w + b.h * b.h) / 20000))
+    const maxVrot = Math.max(0.5, 4 / Math.sqrt(rotInertia))
+    b.vrot = Math.max(-maxVrot, Math.min(maxVrot, ((Math.random() - 0.5) * 3) / rotInertia))
     b.settled = false
     b.settleT = 0
 
@@ -991,7 +996,10 @@ export class World {
           const pushFactor = Math.min(12, 180 / b.mass)
           b.vx += dx * blastImpulse * pushFactor
           b.vy += (dy * blastImpulse - 120) * pushFactor
-          b.vrot += (Math.random() - 0.5) * 4
+          const rotInertia = Math.max(1, (b.mass / 50) + ((b.w * b.w + b.h * b.h) / 20000))
+          const deltaVrot = ((Math.random() - 0.5) * 3) / rotInertia
+          const maxVrot = Math.max(0.6, 5 / Math.sqrt(rotInertia))
+          b.vrot = Math.max(-maxVrot, Math.min(maxVrot, b.vrot + deltaVrot))
         }
       }
     }
@@ -1046,7 +1054,10 @@ export class World {
         const pushFactor = Math.min(12, 180 / b.mass)
         b.vx += dx * applied * pushFactor
         b.vy += dy * applied * pushFactor - 60
-        b.vrot += (Math.random() - 0.5) * 6
+        const rotInertia = Math.max(1, (b.mass / 50) + ((b.w * b.w + b.h * b.h) / 20000))
+        const deltaVrot = ((Math.random() - 0.5) * 3) / rotInertia
+        const maxVrot = Math.max(0.6, 5 / Math.sqrt(rotInertia))
+        b.vrot = Math.max(-maxVrot, Math.min(maxVrot, b.vrot + deltaVrot))
       }
     }
   }
@@ -1187,21 +1198,22 @@ export class World {
 
       if (!b.settled) {
         b.vy += 2200 * dt
-        b.vx *= 1 - 0.4 * dt
+        b.vx *= 1 - 0.45 * dt
         b.x += b.vx * dt
         b.y += b.vy * dt
         b.rot += b.vrot * dt
-        b.vrot *= 1 - 0.8 * dt
+        b.vrot *= 1 - 1.2 * dt
+        if (Math.abs(b.vrot) > 6) b.vrot = Math.sign(b.vrot) * 6
 
         // Boundaries
         if (b.x < 0) {
           b.x = 0
           b.vx = -b.vx * 0.4
-          b.vrot *= 0.6
+          b.vrot *= 0.5
         } else if (b.x + b.w > this.W) {
           b.x = this.W - b.w
           b.vx = -b.vx * 0.4
-          b.vrot *= 0.6
+          b.vrot *= 0.5
         }
 
         // Settled-body ground check with ignore list
@@ -1235,21 +1247,29 @@ export class World {
             }
             b.vy = -b.vy * 0.32
             b.vx *= 0.65
-            b.vrot *= 0.5
+            b.vrot *= 0.35
           } else {
             b.vy = 0
+            b.vrot *= 0.15
+            if (Math.abs(b.vrot) < 0.04) b.vrot = 0
             b.settleT += dt
-            // Smooth ease-to-flat rotation instead of abrupt snapping pop
-            b.rot -= Math.round(b.rot / (Math.PI * 2)) * Math.PI * 2
-            b.rot += (0 - b.rot) * Math.min(1, dt * 14)
-            if (b.settleT > 0.35) {
+
+            // Smooth ease to nearest flat orientation without sign flip singularities
+            let a = b.rot % (Math.PI * 2)
+            if (a > Math.PI) a -= Math.PI * 2
+            else if (a < -Math.PI) a += Math.PI * 2
+            const targetA = Math.round(a / (Math.PI / 2)) * (Math.PI / 2)
+            b.rot += (targetA - a) * Math.min(1, dt * 12)
+
+            if (b.settleT > 0.35 || (Math.abs(b.rot - targetA) < 0.03 && Math.abs(b.vx) < 5)) {
               b.settled = true
               b.vx = 0
               b.vrot = 0
-              b.rot = 0
+              b.rot = targetA
               const last = this.dynamicBodies.pop()!
               if (i < this.dynamicBodies.length) {
                 this.dynamicBodies[i] = last
+                i--
               }
               this.settledBodies.push(b)
             }

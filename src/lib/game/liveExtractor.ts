@@ -309,7 +309,8 @@ export async function extractLiveDocumentLevel(
         }
       }
 
-      const isScenery = (w >= W - 12 && h >= H - 12) || (w >= W * 0.85 && h >= 220)
+      const isPageWrapper = tag === 'body' || tag === 'html' || node === doc.body || tag === 'main'
+      const isScenery = isPageWrapper || (w >= W - 16 && h >= H - 16) || (w >= W * 0.65 && h >= 320) || (w >= W * 0.80 && h >= 160)
       let border: { w: number; c: string } | null = null
       if (hasBorder) {
         border = { w: Math.min(10, maxBw), c: bc! }

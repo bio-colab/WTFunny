@@ -1389,7 +1389,10 @@
         const pushFactor = Math.min(12, 180 / b.mass);
         b.vx += impulseX * pushFactor;
         b.vy += impulseY * pushFactor;
-        b.vrot += (Math.random() - 0.5) * 4;
+        const rotInertia = Math.max(1, b.mass / 50 + (b.w * b.w + b.h * b.h) / 2e4);
+        const deltaVrot = (Math.random() - 0.5) * 3 / rotInertia;
+        const maxVrot = Math.max(0.6, 5 / Math.sqrt(rotInertia));
+        b.vrot = Math.max(-maxVrot, Math.min(maxVrot, b.vrot + deltaVrot));
       }
       if (b.hp <= 0) {
         this.shatterBody(b, wx, wy, Math.hypot(impulseX, impulseY) || 300, impulseX, impulseY);
@@ -1404,7 +1407,9 @@
       const pushFactor = Math.min(14, 220 / b.mass);
       b.vx = impulseX * pushFactor + (Math.random() - 0.5) * 80;
       b.vy = impulseY * pushFactor - 80 - Math.random() * 120;
-      b.vrot = (Math.random() - 0.5) * 8;
+      const rotInertia = Math.max(1, b.mass / 50 + (b.w * b.w + b.h * b.h) / 2e4);
+      const maxVrot = Math.max(0.5, 4 / Math.sqrt(rotInertia));
+      b.vrot = Math.max(-maxVrot, Math.min(maxVrot, (Math.random() - 0.5) * 3 / rotInertia));
       b.settled = false;
       b.settleT = 0;
       if (!this.dynamicBodies.includes(b)) {
@@ -1665,7 +1670,10 @@
             const pushFactor = Math.min(12, 180 / b.mass);
             b.vx += dx * blastImpulse * pushFactor;
             b.vy += (dy * blastImpulse - 120) * pushFactor;
-            b.vrot += (Math.random() - 0.5) * 4;
+            const rotInertia = Math.max(1, b.mass / 50 + (b.w * b.w + b.h * b.h) / 2e4);
+            const deltaVrot = (Math.random() - 0.5) * 3 / rotInertia;
+            const maxVrot = Math.max(0.6, 5 / Math.sqrt(rotInertia));
+            b.vrot = Math.max(-maxVrot, Math.min(maxVrot, b.vrot + deltaVrot));
           }
         }
       }
@@ -1713,7 +1721,10 @@
           const pushFactor = Math.min(12, 180 / b.mass);
           b.vx += dx * applied * pushFactor;
           b.vy += dy * applied * pushFactor - 60;
-          b.vrot += (Math.random() - 0.5) * 6;
+          const rotInertia = Math.max(1, b.mass / 50 + (b.w * b.w + b.h * b.h) / 2e4);
+          const deltaVrot = (Math.random() - 0.5) * 3 / rotInertia;
+          const maxVrot = Math.max(0.6, 5 / Math.sqrt(rotInertia));
+          b.vrot = Math.max(-maxVrot, Math.min(maxVrot, b.vrot + deltaVrot));
         }
       }
     }
@@ -1838,19 +1849,20 @@
         }
         if (!b.settled) {
           b.vy += 2200 * dt;
-          b.vx *= 1 - 0.4 * dt;
+          b.vx *= 1 - 0.45 * dt;
           b.x += b.vx * dt;
           b.y += b.vy * dt;
           b.rot += b.vrot * dt;
-          b.vrot *= 1 - 0.8 * dt;
+          b.vrot *= 1 - 1.2 * dt;
+          if (Math.abs(b.vrot) > 6) b.vrot = Math.sign(b.vrot) * 6;
           if (b.x < 0) {
             b.x = 0;
             b.vx = -b.vx * 0.4;
-            b.vrot *= 0.6;
+            b.vrot *= 0.5;
           } else if (b.x + b.w > this.W) {
             b.x = this.W - b.w;
             b.vx = -b.vx * 0.4;
-            b.vrot *= 0.6;
+            b.vrot *= 0.5;
           }
           let landSurfaceY = floorY;
           const testBottomY = b.y + b.h;
@@ -1878,20 +1890,26 @@
               }
               b.vy = -b.vy * 0.32;
               b.vx *= 0.65;
-              b.vrot *= 0.5;
+              b.vrot *= 0.35;
             } else {
               b.vy = 0;
+              b.vrot *= 0.15;
+              if (Math.abs(b.vrot) < 0.04) b.vrot = 0;
               b.settleT += dt;
-              b.rot -= Math.round(b.rot / (Math.PI * 2)) * Math.PI * 2;
-              b.rot += (0 - b.rot) * Math.min(1, dt * 14);
-              if (b.settleT > 0.35) {
+              let a = b.rot % (Math.PI * 2);
+              if (a > Math.PI) a -= Math.PI * 2;
+              else if (a < -Math.PI) a += Math.PI * 2;
+              const targetA = Math.round(a / (Math.PI / 2)) * (Math.PI / 2);
+              b.rot += (targetA - a) * Math.min(1, dt * 12);
+              if (b.settleT > 0.35 || Math.abs(b.rot - targetA) < 0.03 && Math.abs(b.vx) < 5) {
                 b.settled = true;
                 b.vx = 0;
                 b.vrot = 0;
-                b.rot = 0;
+                b.rot = targetA;
                 const last = this.dynamicBodies.pop();
                 if (i < this.dynamicBodies.length) {
                   this.dynamicBodies[i] = last;
+                  i--;
                 }
                 this.settledBodies.push(b);
               }
@@ -6274,7 +6292,7 @@
       this.world.onShatter = (b, force) => {
         if (b.mass > 350 || force > 450) {
           this.hitStopTimer = Math.min(0.035, 0.015 + b.mass / 35e3);
-          this.shake = Math.max(this.shake, Math.min(10, 3 + force / 90));
+          this.shake = Math.max(this.shake, Math.min(1.2, 0.25 + force / 2500));
         }
       };
       this.world.onPortalShatter = (_wx, _wy) => {
@@ -6504,8 +6522,9 @@
       if (this.hitStopTimer > 0) {
         this.hitStopTimer -= dt;
         if (this.shake > 0) {
-          this.shakeX = (Math.random() - 0.5) * this.shake * 34;
-          this.shakeY = (Math.random() - 0.5) * this.shake * 34;
+          const maxShakePx = Math.min(18, this.shake * 22);
+          this.shakeX = (Math.random() - 0.5) * 2 * maxShakePx;
+          this.shakeY = (Math.random() - 0.5) * 2 * maxShakePx;
         }
         this.render();
         return;
@@ -6719,9 +6738,10 @@
       this.camX = Math.max(0, Math.min(Math.max(0, world.W - this.viewW), this.camX));
       this.camY = Math.max(0, Math.min(Math.max(0, world.H - this.viewH), this.camY));
       if (this.shake > 0) {
-        this.shake = Math.max(0, this.shake - dt * 2.2);
-        this.shakeX = (Math.random() - 0.5) * this.shake * 34;
-        this.shakeY = (Math.random() - 0.5) * this.shake * 34;
+        this.shake = Math.max(0, this.shake - dt * 6.5);
+        const maxShakePx = Math.min(18, this.shake * 22);
+        this.shakeX = (Math.random() - 0.5) * 2 * maxShakePx;
+        this.shakeY = (Math.random() - 0.5) * 2 * maxShakePx;
       } else {
         this.shakeX = 0;
         this.shakeY = 0;
@@ -7183,7 +7203,8 @@
           } catch {
           }
         }
-        const isScenery = w >= W2 - 12 && h >= H - 12 || w >= W2 * 0.85 && h >= 220;
+        const isPageWrapper = tag === "body" || tag === "html" || node === doc.body || tag === "main";
+        const isScenery = isPageWrapper || w >= W2 - 16 && h >= H - 16 || w >= W2 * 0.65 && h >= 320 || w >= W2 * 0.8 && h >= 160;
         let border = null;
         if (hasBorder) {
           border = { w: Math.min(10, maxBw), c: bc };
