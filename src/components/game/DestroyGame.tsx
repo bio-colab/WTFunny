@@ -280,7 +280,8 @@ export default function DestroyGame() {
     [stats?.weapon]
   )
 
-  const rankInfo = complete ? getDestructionRank(complete.time, (stats?.pct ?? 100) / 100) : null
+  const finalPct = stats ? (stats.pct <= 1 ? stats.pct : stats.pct / 100) : 1
+  const rankInfo = complete ? getDestructionRank(complete.time, finalPct) : null
 
   return (
     <div className="dw-app">

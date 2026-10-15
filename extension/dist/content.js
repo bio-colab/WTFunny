@@ -352,6 +352,15 @@
       this.bucketCols = 0;
       this.bucketRows = 0;
       this.spatialBuckets = [];
+      // Legacy compatibility grid arrays (allocated lazily on demand if legacy loader is called):
+      this.mat = null;
+      this.color = null;
+      this.owner = null;
+      this.heat = null;
+      this.pixBuf = null;
+      this.imgData = null;
+      this.levelCanvas = null;
+      this.levelCtx = null;
       this.dirty = true;
       // Solid Bodies Engine:
       this.bodies = [];
@@ -383,18 +392,14 @@
       for (let i = 0; i < nBuckets; i++) {
         this.spatialBuckets[i] = [];
       }
-      const n = this.GW * this.GH;
-      this.mat = new Uint8Array(n);
-      this.color = new Uint32Array(n);
-      this.owner = new Int32Array(n).fill(-1);
-      this.heat = new Uint8Array(n);
-      this.pixBuf = new Uint32Array(n);
-      this.imgData = new ImageData(this.GW, this.GH);
-      new Uint32Array(this.imgData.data.buffer).set(this.pixBuf);
-      this.levelCanvas = document.createElement("canvas");
-      this.levelCanvas.width = Math.min(32, this.GW);
-      this.levelCanvas.height = Math.min(32, this.GH);
-      this.levelCtx = this.levelCanvas.getContext("2d");
+      this.mat = null;
+      this.color = null;
+      this.owner = null;
+      this.heat = null;
+      this.pixBuf = null;
+      this.imgData = null;
+      this.levelCanvas = null;
+      this.levelCtx = null;
       this.bodies = [];
       this.dynamicBodies = [];
       this.settledBodies = [];
@@ -410,7 +415,22 @@
       this.explosions = 0;
       this.totalCells = 1;
       this.totalMass = 1;
-      const bedrockY0 = Math.max(0, H - 28);
+    }
+    ensureLegacyBuffers() {
+      if (this.mat) return;
+      const n = this.GW * this.GH;
+      this.mat = new Uint8Array(n);
+      this.color = new Uint32Array(n);
+      this.owner = new Int32Array(n).fill(-1);
+      this.heat = new Uint8Array(n);
+      this.pixBuf = new Uint32Array(n);
+      this.imgData = new ImageData(this.GW, this.GH);
+      new Uint32Array(this.imgData.data.buffer).set(this.pixBuf);
+      this.levelCanvas = document.createElement("canvas");
+      this.levelCanvas.width = Math.min(32, this.GW);
+      this.levelCanvas.height = Math.min(32, this.GH);
+      this.levelCtx = this.levelCanvas.getContext("2d");
+      const bedrockY0 = Math.max(0, this.H - 28);
       const bedCy0 = Math.floor(bedrockY0 / CELL);
       for (let cy = bedCy0; cy < this.GH; cy++) {
         const row = cy * this.GW;
@@ -487,9 +507,14 @@
     }
     // Fallback / legacy bridge loader
     loadFromLoader(colors, owners, elements, pageGW, pageGH) {
-      this.color.fill(0);
-      this.owner.fill(-1);
-      this.mat.fill(MAT_EMPTY);
+      this.ensureLegacyBuffers();
+      const mat = this.mat;
+      const color = this.color;
+      const owner = this.owner;
+      const pixBuf = this.pixBuf;
+      color.fill(0);
+      owner.fill(-1);
+      mat.fill(MAT_EMPTY);
       this.elements = elements;
       for (let cy = 0; cy < pageGH; cy++) {
         const dstRow = (cy + SKY_ROWS) * this.GW;
@@ -499,10 +524,10 @@
           const own = owners[srcRow + cx];
           if (c !== 0 && own >= 0) {
             const i = dstRow + cx;
-            this.mat[i] = MAT_SOLID;
-            this.color[i] = c;
-            this.pixBuf[i] = c;
-            this.owner[i] = own;
+            mat[i] = MAT_SOLID;
+            color[i] = c;
+            pixBuf[i] = c;
+            owner[i] = own;
           }
         }
       }
@@ -510,9 +535,9 @@
       for (let cy = this.GH - 28; cy < this.GH; cy++) {
         for (let cx = 0; cx < this.GW; cx++) {
           const i = this.idx(cx, cy);
-          this.mat[i] = MAT_BEDROCK;
-          this.color[i] = bed;
-          this.pixBuf[i] = bed;
+          mat[i] = MAT_BEDROCK;
+          color[i] = bed;
+          pixBuf[i] = bed;
         }
       }
       this.totalCells = Math.max(1, elements.size * 100);
@@ -995,7 +1020,7 @@
       }
     }
     igniteCell(i, strength = 220) {
-      if (this.mat[i] !== MAT_SOLID || this.heat[i] > 0) return;
+      if (!this.mat || !this.heat || this.mat[i] !== MAT_SOLID || this.heat[i] > 0) return;
       if (this.burns.length > 9e3) return;
       this.heat[i] = Math.min(255, strength);
       this.burns.push({ idx: i, t: 0, dur: 1.1 + Math.random() * 1.3 });
@@ -5917,25 +5942,44 @@
       this.bg = buildBackgrounds(Math.max(900, this.viewW), Math.max(700, this.viewH), bgTheme);
       let spawnX = level.W / 2;
       let spawnY = skyPx + 20;
-      outer: for (let cy = 2; cy < this.world.GH - 4; cy++) {
-        for (let cx = Math.floor(this.world.GW / 4); cx < this.world.GW - 4; cx += 2) {
-          if (this.world.mat[this.world.idx(cx, cy)] !== MAT_EMPTY && this.world.mat[this.world.idx(cx, cy - 1)] === MAT_EMPTY) {
-            let ok = true;
-            for (let hy = Math.max(1, cy - 24); hy < cy; hy++) {
-              for (let hx = -6; hx <= 6; hx += 3) {
-                const xx = cx + hx;
-                if (xx < 0 || xx >= this.world.GW) continue;
-                if (this.world.mat[this.world.idx(xx, hy)] !== MAT_EMPTY) {
-                  ok = false;
-                  break;
-                }
+      if (level.bodies && level.bodies.length > 0) {
+        const minX = level.W * 0.2;
+        const maxX = level.W * 0.8;
+        let bestY = Infinity;
+        let bestX = spawnX;
+        for (let i = 0; i < this.world.bodies.length; i++) {
+          const b = this.world.bodies[i];
+          if (!b.anchored || b.destroyed) continue;
+          if (b.w < 30 || b.h < 8) continue;
+          if (b.x + b.w < minX || b.x > maxX) continue;
+          const testX = Math.max(b.x + 16, Math.min(b.x + b.w - 16, level.W / 2));
+          const testY = b.y - 1;
+          if (testY < bestY && testY >= skyPx) {
+            let headroomClear = true;
+            for (let dy = 2; dy <= 44; dy += 6) {
+              if (this.world.solidAtWorld(testX, testY - dy)) {
+                headroomClear = false;
+                break;
               }
-              if (!ok) break;
             }
-            if (!ok) continue;
-            spawnX = cx * CELL;
-            spawnY = cy * CELL - 1;
-            break outer;
+            if (headroomClear) {
+              bestY = testY;
+              bestX = testX;
+            }
+          }
+        }
+        if (bestY < Infinity) {
+          spawnX = bestX;
+          spawnY = bestY;
+        }
+      } else if (this.world.mat) {
+        outer: for (let cy = 2; cy < this.world.GH - 4; cy++) {
+          for (let cx = Math.floor(this.world.GW / 4); cx < this.world.GW - 4; cx += 2) {
+            if (this.world.mat[this.world.idx(cx, cy)] !== MAT_EMPTY && this.world.mat[this.world.idx(cx, cy - 1)] === MAT_EMPTY) {
+              spawnX = cx * CELL;
+              spawnY = cy * CELL - 1;
+              break outer;
+            }
           }
         }
       }
@@ -7475,7 +7519,8 @@
     }
     let milestoneTimer = null;
     function showMilestone(info) {
-      milestoneBanner.textContent = `\u{1F4A5} [${info.pct}% \u062F\u0645\u0627\u0631] ${info.titleAr}`;
+      const displayPct = Math.round(info.pct <= 1 ? info.pct * 100 : info.pct);
+      milestoneBanner.textContent = `\u{1F4A5} [${displayPct}% \u062F\u0645\u0627\u0631] ${info.titleAr}`;
       milestoneBanner.classList.add("show");
       if (milestoneTimer) clearTimeout(milestoneTimer);
       milestoneTimer = setTimeout(() => {
@@ -7509,14 +7554,36 @@
       onProgress("\u0642\u0631\u0627\u0621\u0629 \u062E\u0631\u064A\u0637\u0629 \u0627\u0644\u0645\u0648\u0642\u0639 \u0627\u0644\u062D\u064A\u2026", 0.1);
       const level = await extractLiveDocumentLevel(document, window, onProgress);
       sitePill.textContent = `${window.location.hostname} \u2022 ${level.bodies.length} \u0639\u0646\u0635\u0631 \u0635\u0644\u0628`;
+      let lastPct = -1;
+      let lastWeaponIdx = -1;
+      let lastFps = -1;
+      let lastBlocks = -1;
+      let lastLetters = -1;
+      let lastExplosions = -1;
       const engine = new DestroyEngine({
         onProgress,
         onStats: (stats) => {
-          pctVal.textContent = `${Math.round(stats.pct)}% \u062F\u0645\u0627\u0631`;
-          progressFill.style.width = `${Math.min(100, Math.round(stats.pct))}%`;
-          meterCounts.textContent = `\u{1F4A5} ${stats.blocks} \u0635\u0644\u0628 \u0645\u062F\u0645\u0651\u0631 | \u{1F524} ${stats.letters} \u062D\u0631\u0641 \u0645\u0633\u062D\u0648\u0642 | \u{1F4A3} ${stats.explosions} \u062A\u0641\u062C\u064A\u0631`;
-          fpsBadge.textContent = `${Math.round(stats.fps)} FPS`;
-          updateActiveWeapon(stats.weapon);
+          const pct100 = Math.min(100, Math.max(0, Math.round(stats.pct * 100)));
+          if (pct100 !== lastPct) {
+            lastPct = pct100;
+            pctVal.textContent = `${pct100}% \u062F\u0645\u0627\u0631`;
+            progressFill.style.width = `${pct100}%`;
+          }
+          if (stats.blocks !== lastBlocks || stats.letters !== lastLetters || stats.explosions !== lastExplosions) {
+            lastBlocks = stats.blocks;
+            lastLetters = stats.letters;
+            lastExplosions = stats.explosions;
+            meterCounts.textContent = `\u{1F4A5} ${stats.blocks} \u0635\u0644\u0628 \u0645\u062F\u0645\u0651\u0631 | \u{1F524} ${stats.letters} \u062D\u0631\u0641 \u0645\u0633\u062D\u0648\u0642 | \u{1F4A3} ${stats.explosions} \u062A\u0641\u062C\u064A\u0631`;
+          }
+          const roundedFps = Math.round(stats.fps);
+          if (roundedFps !== lastFps) {
+            lastFps = roundedFps;
+            fpsBadge.textContent = `${roundedFps} FPS`;
+          }
+          if (stats.weapon !== lastWeaponIdx) {
+            lastWeaponIdx = stats.weapon;
+            updateActiveWeapon(stats.weapon);
+          }
         },
         onComplete: (s) => {
           showMilestone({ pct: 100, titleAr: "\u0646\u0635\u0631 \u0643\u0627\u0633\u062D! \u062A\u0645 \u0645\u062D\u0648 \u0627\u0644\u0645\u0648\u0642\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644!", titleEn: "Total Obliteration!" });

@@ -613,7 +613,8 @@ async function launchJahdar() {
   // Milestone Toast Helper
   let milestoneTimer: any = null
   function showMilestone(info: MilestoneInfo) {
-    milestoneBanner.textContent = `💥 [${info.pct}% دمار] ${info.titleAr}`
+    const displayPct = Math.round(info.pct <= 1 ? info.pct * 100 : info.pct)
+    milestoneBanner.textContent = `💥 [${displayPct}% دمار] ${info.titleAr}`
     milestoneBanner.classList.add('show')
     if (milestoneTimer) clearTimeout(milestoneTimer)
     milestoneTimer = setTimeout(() => {
@@ -657,15 +658,39 @@ async function launchJahdar() {
     const level = await extractLiveDocumentLevel(document, window, onProgress)
     sitePill.textContent = `${window.location.hostname} • ${level.bodies.length} عنصر صلب`
 
+    // DOM State Caching to prevent redundant mutations
+    let lastPct = -1
+    let lastWeaponIdx = -1
+    let lastFps = -1
+    let lastBlocks = -1
+    let lastLetters = -1
+    let lastExplosions = -1
+
     // 2. Initialize Engine
     const engine = new DestroyEngine({
       onProgress,
       onStats: (stats: GameStats) => {
-        pctVal.textContent = `${Math.round(stats.pct)}% دمار`
-        progressFill.style.width = `${Math.min(100, Math.round(stats.pct))}%`
-        meterCounts.textContent = `💥 ${stats.blocks} صلب مدمّر | 🔤 ${stats.letters} حرف مسحوق | 💣 ${stats.explosions} تفجير`
-        fpsBadge.textContent = `${Math.round(stats.fps)} FPS`
-        updateActiveWeapon(stats.weapon)
+        const pct100 = Math.min(100, Math.max(0, Math.round(stats.pct * 100)))
+        if (pct100 !== lastPct) {
+          lastPct = pct100
+          pctVal.textContent = `${pct100}% دمار`
+          progressFill.style.width = `${pct100}%`
+        }
+        if (stats.blocks !== lastBlocks || stats.letters !== lastLetters || stats.explosions !== lastExplosions) {
+          lastBlocks = stats.blocks
+          lastLetters = stats.letters
+          lastExplosions = stats.explosions
+          meterCounts.textContent = `💥 ${stats.blocks} صلب مدمّر | 🔤 ${stats.letters} حرف مسحوق | 💣 ${stats.explosions} تفجير`
+        }
+        const roundedFps = Math.round(stats.fps)
+        if (roundedFps !== lastFps) {
+          lastFps = roundedFps
+          fpsBadge.textContent = `${roundedFps} FPS`
+        }
+        if (stats.weapon !== lastWeaponIdx) {
+          lastWeaponIdx = stats.weapon
+          updateActiveWeapon(stats.weapon)
+        }
       },
       onComplete: (s) => {
         showMilestone({ pct: 100, titleAr: 'نصر كاسح! تم محو الموقع بالكامل!', titleEn: 'Total Obliteration!' })

@@ -191,29 +191,57 @@ export class DestroyEngine {
     }
     this.bg = buildBackgrounds(Math.max(900, this.viewW), Math.max(700, this.viewH), bgTheme)
 
-    // spawn player: topmost surface (page roof) with headroom — like the original
+    // spawn player: topmost solid surface or platform near page center with headroom
     let spawnX = level.W / 2
     let spawnY = skyPx + 20
-    outer: for (let cy = 2; cy < this.world.GH - 4; cy++) {
-      for (let cx = Math.floor(this.world.GW / 4); cx < this.world.GW - 4; cx += 2) {
-        if (this.world.mat[this.world.idx(cx, cy)] !== MAT_EMPTY && this.world.mat[this.world.idx(cx, cy - 1)] === MAT_EMPTY) {
-          // headroom above this surface
-          let ok = true
-          for (let hy = Math.max(1, cy - 24); hy < cy; hy++) {
-            for (let hx = -6; hx <= 6; hx += 3) {
-              const xx = cx + hx
-              if (xx < 0 || xx >= this.world.GW) continue
-              if (this.world.mat[this.world.idx(xx, hy)] !== MAT_EMPTY) {
-                ok = false
-                break
-              }
+
+    if (level.bodies && level.bodies.length > 0) {
+      // Find candidate landing surfaces near horizontal center (within center 60% of page)
+      const minX = level.W * 0.2
+      const maxX = level.W * 0.8
+      let bestY = Infinity
+      let bestX = spawnX
+
+      for (let i = 0; i < this.world.bodies.length; i++) {
+        const b = this.world.bodies[i]
+        if (!b.anchored || b.destroyed) continue
+        if (b.w < 30 || b.h < 8) continue // skip tiny slivers
+        if (b.x + b.w < minX || b.x > maxX) continue // must be reasonably near center
+
+        // Candidate landing spot: top-center of this body
+        const testX = Math.max(b.x + 16, Math.min(b.x + b.w - 16, level.W / 2))
+        const testY = b.y - 1 // right above the top surface
+
+        // Must be higher (smaller Y) than our current best, and below the sky
+        if (testY < bestY && testY >= skyPx) {
+          // Check headroom: ensure at least 44px of vertical clearance above
+          let headroomClear = true
+          for (let dy = 2; dy <= 44; dy += 6) {
+            if (this.world.solidAtWorld(testX, testY - dy)) {
+              headroomClear = false
+              break
             }
-            if (!ok) break
           }
-          if (!ok) continue
-          spawnX = cx * CELL
-          spawnY = cy * CELL - 1
-          break outer
+          if (headroomClear) {
+            bestY = testY
+            bestX = testX
+          }
+        }
+      }
+
+      if (bestY < Infinity) {
+        spawnX = bestX
+        spawnY = bestY
+      }
+    } else if (this.world.mat) {
+      // Fallback for legacy loader
+      outer: for (let cy = 2; cy < this.world.GH - 4; cy++) {
+        for (let cx = Math.floor(this.world.GW / 4); cx < this.world.GW - 4; cx += 2) {
+          if (this.world.mat[this.world.idx(cx, cy)] !== MAT_EMPTY && this.world.mat[this.world.idx(cx, cy - 1)] === MAT_EMPTY) {
+            spawnX = cx * CELL
+            spawnY = cy * CELL - 1
+            break outer
+          }
         }
       }
     }

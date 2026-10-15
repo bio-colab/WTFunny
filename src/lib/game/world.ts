@@ -176,15 +176,15 @@ export class World {
   bucketRows = 0
   spatialBuckets: number[][] = []
 
-  // Legacy compatibility grid arrays (still kept synchronized for raycasts/HUD):
-  mat!: Uint8Array
-  color!: Uint32Array
-  owner!: Int32Array
-  heat!: Uint8Array
-  pixBuf!: Uint32Array
-  imgData!: ImageData
-  levelCanvas!: HTMLCanvasElement
-  levelCtx!: CanvasRenderingContext2D
+  // Legacy compatibility grid arrays (allocated lazily on demand if legacy loader is called):
+  mat: Uint8Array | null = null
+  color: Uint32Array | null = null
+  owner: Int32Array | null = null
+  heat: Uint8Array | null = null
+  pixBuf: Uint32Array | null = null
+  imgData: ImageData | null = null
+  levelCanvas: HTMLCanvasElement | null = null
+  levelCtx: CanvasRenderingContext2D | null = null
   dirty = true
 
   // Solid Bodies Engine:
@@ -224,18 +224,15 @@ export class World {
       this.spatialBuckets[i] = []
     }
 
-    const n = this.GW * this.GH
-    this.mat = new Uint8Array(n)
-    this.color = new Uint32Array(n)
-    this.owner = new Int32Array(n).fill(-1)
-    this.heat = new Uint8Array(n)
-    this.pixBuf = new Uint32Array(n)
-    this.imgData = new ImageData(this.GW, this.GH)
-    new Uint32Array(this.imgData.data.buffer).set(this.pixBuf)
-    this.levelCanvas = document.createElement('canvas')
-    this.levelCanvas.width = Math.min(32, this.GW)
-    this.levelCanvas.height = Math.min(32, this.GH)
-    this.levelCtx = this.levelCanvas.getContext('2d')!
+    // Modern SolidBody engine: lazy initialization for legacy voxel arrays to prevent 340MB+ RAM allocation
+    this.mat = null
+    this.color = null
+    this.owner = null
+    this.heat = null
+    this.pixBuf = null
+    this.imgData = null
+    this.levelCanvas = null
+    this.levelCtx = null
 
     this.bodies = []
     this.dynamicBodies = []
@@ -252,9 +249,24 @@ export class World {
     this.explosions = 0
     this.totalCells = 1
     this.totalMass = 1
+  }
 
-    // Bedrock floor: bottom 28px in legacy mat
-    const bedrockY0 = Math.max(0, H - 28)
+  ensureLegacyBuffers() {
+    if (this.mat) return
+    const n = this.GW * this.GH
+    this.mat = new Uint8Array(n)
+    this.color = new Uint32Array(n)
+    this.owner = new Int32Array(n).fill(-1)
+    this.heat = new Uint8Array(n)
+    this.pixBuf = new Uint32Array(n)
+    this.imgData = new ImageData(this.GW, this.GH)
+    new Uint32Array(this.imgData.data.buffer).set(this.pixBuf)
+    this.levelCanvas = document.createElement('canvas')
+    this.levelCanvas.width = Math.min(32, this.GW)
+    this.levelCanvas.height = Math.min(32, this.GH)
+    this.levelCtx = this.levelCanvas.getContext('2d')!
+
+    const bedrockY0 = Math.max(0, this.H - 28)
     const bedCy0 = Math.floor(bedrockY0 / CELL)
     for (let cy = bedCy0; cy < this.GH; cy++) {
       const row = cy * this.GW
@@ -364,9 +376,15 @@ export class World {
     pageGW: number,
     pageGH: number
   ) {
-    this.color.fill(0)
-    this.owner.fill(-1)
-    this.mat.fill(MAT_EMPTY)
+    this.ensureLegacyBuffers()
+    const mat = this.mat!
+    const color = this.color!
+    const owner = this.owner!
+    const pixBuf = this.pixBuf!
+
+    color.fill(0)
+    owner.fill(-1)
+    mat.fill(MAT_EMPTY)
     this.elements = elements
     for (let cy = 0; cy < pageGH; cy++) {
       const dstRow = (cy + SKY_ROWS) * this.GW
@@ -376,10 +394,10 @@ export class World {
         const own = owners[srcRow + cx]
         if (c !== 0 && own >= 0) {
           const i = dstRow + cx
-          this.mat[i] = MAT_SOLID
-          this.color[i] = c
-          this.pixBuf[i] = c
-          this.owner[i] = own
+          mat[i] = MAT_SOLID
+          color[i] = c
+          pixBuf[i] = c
+          owner[i] = own
         }
       }
     }
@@ -387,9 +405,9 @@ export class World {
     for (let cy = this.GH - 28; cy < this.GH; cy++) {
       for (let cx = 0; cx < this.GW; cx++) {
         const i = this.idx(cx, cy)
-        this.mat[i] = MAT_BEDROCK
-        this.color[i] = bed
-        this.pixBuf[i] = bed
+        mat[i] = MAT_BEDROCK
+        color[i] = bed
+        pixBuf[i] = bed
       }
     }
     this.totalCells = Math.max(1, elements.size * 100)
@@ -967,7 +985,7 @@ export class World {
   }
 
   igniteCell(i: number, strength = 220) {
-    if (this.mat[i] !== MAT_SOLID || this.heat[i] > 0) return
+    if (!this.mat || !this.heat || this.mat[i] !== MAT_SOLID || this.heat[i] > 0) return
     if (this.burns.length > 9000) return
     this.heat[i] = Math.min(255, strength)
     this.burns.push({ idx: i, t: 0, dur: 1.1 + Math.random() * 1.3 })
