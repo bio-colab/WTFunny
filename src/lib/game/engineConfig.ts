@@ -432,3 +432,23 @@ export class ConfigManager {
     }
   }
 }
+
+export interface DestructionRankInfo {
+  rank: 'S' | 'A' | 'B' | 'C'
+  title: string
+  color: string
+  desc: string
+}
+
+export function getDestructionRank(timeSec: number, destroyedPct: number): DestructionRankInfo {
+  if (destroyedPct >= 0.98 && timeSec <= 50) {
+    return { rank: 'S', title: 'أسطورة التدمير (Rank S)', color: '#f59e0b', desc: 'سرعة إبادة خارقة في أقل من 50 ثانية!' }
+  }
+  if (destroyedPct >= 0.95 && timeSec <= 90) {
+    return { rank: 'A', title: 'مدمّر نخبوي (Rank A)', color: '#38bdf8', desc: 'تدمير شبه كامل واحترافي!' }
+  }
+  if (destroyedPct >= 0.85) {
+    return { rank: 'B', title: 'سحق متقدم (Rank B)', color: '#10b981', desc: 'سقوط الغالبية العظمى للموقع.' }
+  }
+  return { rank: 'C', title: 'مدمّر معتمد (Rank C)', color: '#a1a1aa', desc: 'تم إنجاز المهمة بنجاح.' }
+}

@@ -5,7 +5,7 @@ import { DestroyEngine, GameStats, MilestoneInfo } from '@/lib/game/engine'
 import { WEAPONS } from '@/lib/game/weapons'
 import { WEAPON_ICONS, paintSpriteInto } from '@/lib/game/sprites'
 import { sound } from '@/lib/game/sound'
-import { ConfigManager } from '@/lib/game/engineConfig'
+import { ConfigManager, getDestructionRank } from '@/lib/game/engineConfig'
 import GameLab from './GameLab'
 
 type Phase = 'title' | 'loading' | 'play' | 'complete'
@@ -20,19 +20,6 @@ const BG_THEMES = [
 function fmtTime(sec: number) {
   const s = Math.max(0, Math.floor(sec))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-function getDestructionRank(timeSec: number, destroyedPct: number) {
-  if (destroyedPct >= 0.98 && timeSec <= 50) {
-    return { rank: 'S', title: 'أسطورة التدمير (Rank S)', color: '#f59e0b', desc: 'سرعة إبادة خارقة في أقل من 50 ثانية!' }
-  }
-  if (destroyedPct >= 0.95 && timeSec <= 90) {
-    return { rank: 'A', title: 'مدمّر نخبوي (Rank A)', color: '#3b82f6', desc: 'تدمير شبه كامل واحترافي!' }
-  }
-  if (destroyedPct >= 0.85) {
-    return { rank: 'B', title: 'سحق متقدم (Rank B)', color: '#10b981', desc: 'سقوط الغالبية العظمى للموقع.' }
-  }
-  return { rank: 'C', title: 'مدمّر معتمد (Rank C)', color: '#a1a1aa', desc: 'تم إنجاز المهمة بنجاح.' }
 }
 
 export default function DestroyGame() {

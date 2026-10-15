@@ -332,6 +332,18 @@
       }
     }
   };
+  function getDestructionRank(timeSec, destroyedPct) {
+    if (destroyedPct >= 0.98 && timeSec <= 50) {
+      return { rank: "S", title: "\u0623\u0633\u0637\u0648\u0631\u0629 \u0627\u0644\u062A\u062F\u0645\u064A\u0631 (Rank S)", color: "#f59e0b", desc: "\u0633\u0631\u0639\u0629 \u0625\u0628\u0627\u062F\u0629 \u062E\u0627\u0631\u0642\u0629 \u0641\u064A \u0623\u0642\u0644 \u0645\u0646 50 \u062B\u0627\u0646\u064A\u0629!" };
+    }
+    if (destroyedPct >= 0.95 && timeSec <= 90) {
+      return { rank: "A", title: "\u0645\u062F\u0645\u0651\u0631 \u0646\u062E\u0628\u0648\u064A (Rank A)", color: "#38bdf8", desc: "\u062A\u062F\u0645\u064A\u0631 \u0634\u0628\u0647 \u0643\u0627\u0645\u0644 \u0648\u0627\u062D\u062A\u0631\u0627\u0641\u064A!" };
+    }
+    if (destroyedPct >= 0.85) {
+      return { rank: "B", title: "\u0633\u062D\u0642 \u0645\u062A\u0642\u062F\u0645 (Rank B)", color: "#10b981", desc: "\u0633\u0642\u0648\u0637 \u0627\u0644\u063A\u0627\u0644\u0628\u064A\u0629 \u0627\u0644\u0639\u0638\u0645\u0649 \u0644\u0644\u0645\u0648\u0642\u0639." };
+    }
+    return { rank: "C", title: "\u0645\u062F\u0645\u0651\u0631 \u0645\u0639\u062A\u0645\u062F (Rank C)", color: "#a1a1aa", desc: "\u062A\u0645 \u0625\u0646\u062C\u0627\u0632 \u0627\u0644\u0645\u0647\u0645\u0629 \u0628\u0646\u062C\u0627\u062D." };
+  }
 
   // src/lib/game/sound.ts
   var SoundEngine = class {
@@ -7479,6 +7491,22 @@
   var origBodyOverflow = "";
   var isPhotoMode = false;
   var windowListeners = [];
+  var currentTheme = "cities";
+  var currentPhysicsPreset = "arcade";
+  var latestStats = {
+    fps: 60,
+    letters: 0,
+    blocks: 0,
+    explosions: 0,
+    shots: 0,
+    pct: 0,
+    weapon: 0,
+    grounded: true,
+    health: 100,
+    jetFuel: 100,
+    grenades: 3,
+    time: 0
+  };
   function isJahdarActive() {
     return jahdarHostEl !== null && document.getElementById("jahdar-root") !== null;
   }
@@ -7923,6 +7951,309 @@
       color: #38bdf8;
       font-family: monospace;
     }
+
+    /* Screen Flash Overlay */
+    #photo-flash {
+      position: absolute;
+      inset: 0;
+      background: #ffffff;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 100;
+      transition: opacity 0.35s ease-out;
+    }
+
+    /* Floating Toast */
+    #jahdar-toast {
+      position: absolute;
+      bottom: 82px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      color: #fef08a;
+      padding: 9px 20px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.25s ease;
+      z-index: 95;
+      direction: rtl;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #jahdar-toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* Victory Modal Backdrop & Card */
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(4, 7, 13, 0.85);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 80;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+      direction: rtl;
+    }
+
+    .modal-backdrop.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .victory-card {
+      background: rgba(17, 24, 39, 0.94);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      border-radius: 24px;
+      padding: 30px 34px;
+      max-width: 480px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9), 0 0 35px rgba(245, 158, 11, 0.2);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      transform: scale(0.92);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .modal-backdrop.show .victory-card {
+      transform: scale(1);
+    }
+
+    .victory-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .victory-rank-badge {
+      width: 68px;
+      height: 68px;
+      border-radius: 18px;
+      background: #090d16;
+      border: 2px solid #f59e0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 34px;
+      font-weight: 900;
+      color: #f59e0b;
+      box-shadow: 0 0 24px rgba(245, 158, 11, 0.5);
+      flex-shrink: 0;
+    }
+
+    .victory-header-text h2 {
+      font-size: 19px;
+      font-weight: 800;
+      color: #fef08a;
+      margin-bottom: 4px;
+    }
+
+    .victory-header-text p {
+      font-size: 12.5px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+
+    .victory-stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      background: rgba(9, 13, 22, 0.7);
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .stat-box {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: #94a3b8;
+    }
+
+    .stat-value {
+      font-size: 15px;
+      font-weight: 700;
+      color: #38bdf8;
+      font-family: monospace;
+    }
+
+    .victory-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .vic-btn {
+      padding: 11px 16px;
+      border-radius: 12px;
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      direction: rtl;
+    }
+
+    .vic-btn-primary {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      color: #0b0f19;
+      box-shadow: 0 4px 16px rgba(245, 158, 11, 0.4);
+    }
+    .vic-btn-primary:hover {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+    }
+
+    .vic-btn-photo {
+      background: #1e293b;
+      border: 1px solid #38bdf8;
+      color: #38bdf8;
+    }
+    .vic-btn-photo:hover {
+      background: rgba(56, 189, 248, 0.15);
+      color: #7dd3fc;
+      transform: translateY(-1px);
+    }
+
+    .vic-btn-close {
+      background: transparent;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      font-size: 12px;
+    }
+    .vic-btn-close:hover {
+      background: #1e293b;
+      color: #e2e8f0;
+    }
+
+    /* Settings Drawer */
+    .settings-drawer {
+      position: absolute;
+      top: 66px;
+      right: 20px;
+      max-width: 480px;
+      width: calc(100% - 40px);
+      background: rgba(9, 13, 22, 0.94);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 18px;
+      padding: 18px 20px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8);
+      z-index: 25;
+      direction: rtl;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-8px);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .settings-drawer.show {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .drawer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .drawer-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #fef08a;
+    }
+
+    .drawer-close {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 4px;
+    }
+    .drawer-close:hover {
+      color: #ef4444;
+    }
+
+    .drawer-content {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .drawer-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .section-title {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+
+    .drawer-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .drawer-pill {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      direction: rtl;
+    }
+
+    .drawer-pill:hover {
+      background: #334155;
+      color: #e2e8f0;
+      border-color: #64748b;
+    }
+
+    .drawer-pill.active {
+      background: rgba(245, 158, 11, 0.18);
+      border-color: #f59e0b;
+      color: #fef08a;
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.35);
+      font-weight: 700;
+    }
   `;
     shadow.appendChild(styleEl);
     const rootWrap = document.createElement("div");
@@ -7964,15 +8295,113 @@
 
         <div class="actions-section">
           <div class="fps-badge" id="fps-badge">60 FPS</div>
+          <button class="hud-btn" id="settings-btn" title="\u0645\u0639\u0645\u0644 \u062C\u064E\u062D\u0652\u062F\u064E\u0631 \u0627\u0644\u0633\u0631\u064A\u0639 [L]">\u2699\uFE0F \u0636\u0628\u0637</button>
           <button class="hud-btn" id="mute-btn" title="\u0643\u062A\u0645 / \u062A\u0634\u063A\u064A\u0644 \u0627\u0644\u0635\u0648\u062A [M]">\u{1F50A} \u0635\u0648\u062A</button>
-          <button class="hud-btn" id="photo-btn" title="\u0648\u0636\u0639 \u0627\u0644\u062A\u0635\u0648\u064A\u0631 \u0627\u0644\u062A\u0630\u0643\u0627\u0631\u064A [H]">\u{1F4F7} \u0644\u0642\u0637\u0629</button>
+          <button class="hud-btn" id="photo-btn" title="\u062D\u0641\u0638 \u0644\u0642\u0637\u0629 \u0634\u0627\u0634\u0629 \u062A\u0630\u0643\u0627\u0631\u064A\u0629 [H]">\u{1F4F7} \u0644\u0642\u0637\u0629</button>
           <button class="hud-btn hud-btn-danger" id="exit-btn" title="\u062E\u0631\u0648\u062C \u0641\u0648\u0631\u064A [Esc]">\u274C \u062E\u0631\u0648\u062C</button>
+        </div>
+      </div>
+
+      <!-- Settings Drawer (GameLab Quick Studio) -->
+      <div id="settings-drawer" class="settings-drawer">
+        <div class="drawer-header">
+          <span class="drawer-title">\u{1F52C} \u0645\u0639\u0645\u0644 \u062C\u064E\u062D\u0652\u062F\u064E\u0631 \u2014 \u0627\u0644\u0636\u0628\u0637 \u0627\u0644\u0633\u0631\u064A\u0639</span>
+          <button class="drawer-close" id="drawer-close-btn" type="button">\u2715</button>
+        </div>
+        <div class="drawer-content">
+          <div class="drawer-section">
+            <div class="section-title">\u{1F3AD} \u0634\u062E\u0635\u064A\u0629 \u0627\u0644\u0628\u0637\u0644</div>
+            <div class="drawer-pills" id="skin-pills">
+              <button class="drawer-pill" data-skin="stickman">\u062C\u064E\u062D\u0652\u062F\u064E\u0631 (\u0627\u0644\u0641\u0627\u0631\u0633)</button>
+              <button class="drawer-pill" data-skin="robot">\u0627\u0644\u0631\u0648\u0628\u0648\u062A 9000</button>
+              <button class="drawer-pill" data-skin="commando">\u0643\u0648\u0645\u0627\u0646\u062F\u0648\u0632</button>
+              <button class="drawer-pill" data-skin="voidMage">\u0633\u0627\u062D\u0631 \u0627\u0644\u0638\u0644\u0627\u0644</button>
+              <button class="drawer-pill" data-skin="custom">\u0627\u0644\u0645\u062E\u0635\u0635</button>
+            </div>
+          </div>
+          <div class="drawer-section">
+            <div class="section-title">\u26A1 \u0646\u0645\u0637 \u0627\u0644\u0641\u064A\u0632\u064A\u0627\u0621</div>
+            <div class="drawer-pills" id="physics-pills">
+              <button class="drawer-pill" data-physics="arcade">\u0643\u0644\u0627\u0633\u064A\u0643\u064A (Arcade)</button>
+              <button class="drawer-pill" data-physics="hyper">\u062E\u0627\u0631\u0642 (Hyper)</button>
+              <button class="drawer-pill" data-physics="moon">\u0642\u0645\u0631 (Moon)</button>
+              <button class="drawer-pill" data-physics="heavy">\u062B\u0642\u064A\u0644 (Heavy)</button>
+            </div>
+          </div>
+          <div class="drawer-section">
+            <div class="section-title">\u{1F306} \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u0627\u0644\u0628\u0627\u0646\u0648\u0631\u0627\u0645\u064A\u0629</div>
+            <div class="drawer-pills" id="theme-pills">
+              <button class="drawer-pill" data-theme="cities">\u0645\u062F\u064A\u0646\u0629 \u0627\u0644\u0633\u0627\u064A\u0628\u0631\u0628\u0627\u0646\u0643</button>
+              <button class="drawer-pill" data-theme="mountain">\u0627\u0644\u063A\u0633\u0642 \u0627\u0644\u062C\u0628\u0644\u064A</button>
+              <button class="drawer-pill" data-theme="sunny">\u0623\u0631\u0636 \u0627\u0644\u0634\u0645\u0633</button>
+            </div>
+          </div>
+          <div class="drawer-section">
+            <div class="section-title">\u{1F50A} \u0627\u0644\u0646\u0645\u0637 \u0627\u0644\u0635\u0648\u062A\u064A</div>
+            <div class="drawer-pills" id="audio-pills">
+              <button class="drawer-pill" data-audio="retro">\u0631\u064A\u062A\u0631\u0648 8-\u0628\u062A</button>
+              <button class="drawer-pill" data-audio="heavyBass">\u0628\u064A\u0633 \u062B\u0642\u064A\u0644</button>
+              <button class="drawer-pill" data-audio="cinematic">\u0633\u064A\u0646\u0645\u0627\u0626\u064A</button>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Bottom Weapon Bar -->
       <div class="weapon-bar-wrap">
         <div class="weapon-bar" id="weapon-bar"></div>
+      </div>
+    </div>
+
+    <!-- Screen Flash Overlay for Photo Capture -->
+    <div id="photo-flash"></div>
+
+    <!-- Floating Toast Notification -->
+    <div id="jahdar-toast"></div>
+
+    <!-- Victory Screen Modal -->
+    <div id="victory-modal" class="modal-backdrop">
+      <div class="victory-card">
+        <div class="victory-header">
+          <div class="victory-rank-badge" id="vic-rank-badge">S</div>
+          <div class="victory-header-text">
+            <h2 class="victory-title" id="vic-title">\u0623\u0633\u0637\u0648\u0631\u0629 \u0627\u0644\u062A\u062F\u0645\u064A\u0631 (Rank S)</h2>
+            <p class="victory-desc" id="vic-desc">\u0633\u0631\u0639\u0629 \u0625\u0628\u0627\u062F\u0629 \u062E\u0627\u0631\u0642\u0629 \u0641\u064A \u0623\u0642\u0644 \u0645\u0646 50 \u062B\u0627\u0646\u064A\u0629!</p>
+          </div>
+        </div>
+
+        <div class="victory-stats-grid">
+          <div class="stat-box">
+            <span class="stat-label">\u23F1\uFE0F \u0627\u0644\u0632\u0645\u0646</span>
+            <span class="stat-value" id="vic-time">0 \u062B\u0627\u0646\u064A\u0629</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">\u{1F4A5} \u0646\u0633\u0628\u0629 \u0627\u0644\u062F\u0645\u0627\u0631</span>
+            <span class="stat-value" id="vic-pct">100%</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">\u{1F9F1} \u0627\u0644\u0623\u062C\u0633\u0627\u0645 \u0627\u0644\u0635\u0644\u0628\u0629</span>
+            <span class="stat-value" id="vic-blocks">0</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">\u{1F524} \u0627\u0644\u062D\u0631\u0648\u0641 \u0627\u0644\u0645\u0633\u062D\u0648\u0642\u0629</span>
+            <span class="stat-value" id="vic-letters">0</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">\u{1F4A3} \u0627\u0644\u062A\u0641\u062C\u064A\u0631\u0627\u062A</span>
+            <span class="stat-value" id="vic-explosions">0</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">\u{1F3AF} \u0627\u0644\u0637\u0644\u0642\u0627\u062A</span>
+            <span class="stat-value" id="vic-shots">0</span>
+          </div>
+        </div>
+
+        <div class="victory-actions">
+          <button class="vic-btn vic-btn-primary" id="vic-reload-btn" type="button">\u{1F504} \u0625\u0639\u0627\u062F\u0629 \u0628\u0646\u0627\u0621 \u0627\u0644\u0645\u0648\u0642\u0639</button>
+          <button class="vic-btn vic-btn-photo" id="vic-photo-btn" type="button">\u{1F4F7} \u062D\u0641\u0638 \u0644\u0642\u0637\u0629 \u0627\u0644\u0646\u0635\u0631</button>
+          <button class="vic-btn vic-btn-close" id="vic-close-btn" type="button">\u2715 \u0645\u062A\u0627\u0628\u0639\u0629 \u0627\u0644\u0627\u0633\u062A\u0643\u0634\u0627\u0641</button>
+        </div>
       </div>
     </div>
 
@@ -7997,6 +8426,7 @@
     const meterCounts = shadow.getElementById("meter-counts");
     const progressFill = shadow.getElementById("progress-fill");
     const fpsBadge = shadow.getElementById("fps-badge");
+    const settingsBtn = shadow.getElementById("settings-btn");
     const muteBtn = shadow.getElementById("mute-btn");
     const photoBtn = shadow.getElementById("photo-btn");
     const exitBtn = shadow.getElementById("exit-btn");
@@ -8007,6 +8437,27 @@
     const loadingSplash = shadow.getElementById("loading-splash");
     const splashFill = shadow.getElementById("splash-fill");
     const splashStatus = shadow.getElementById("splash-status");
+    const settingsDrawer = shadow.getElementById("settings-drawer");
+    const drawerCloseBtn = shadow.getElementById("drawer-close-btn");
+    const skinPills = shadow.getElementById("skin-pills");
+    const physicsPills = shadow.getElementById("physics-pills");
+    const themePills = shadow.getElementById("theme-pills");
+    const audioPills = shadow.getElementById("audio-pills");
+    const photoFlash = shadow.getElementById("photo-flash");
+    const jahdarToast = shadow.getElementById("jahdar-toast");
+    const victoryModal = shadow.getElementById("victory-modal");
+    const vicRankBadge = shadow.getElementById("vic-rank-badge");
+    const vicTitle = shadow.getElementById("vic-title");
+    const vicDesc = shadow.getElementById("vic-desc");
+    const vicTime = shadow.getElementById("vic-time");
+    const vicPct = shadow.getElementById("vic-pct");
+    const vicBlocks = shadow.getElementById("vic-blocks");
+    const vicLetters = shadow.getElementById("vic-letters");
+    const vicExplosions = shadow.getElementById("vic-explosions");
+    const vicShots = shadow.getElementById("vic-shots");
+    const vicReloadBtn = shadow.getElementById("vic-reload-btn");
+    const vicPhotoBtn = shadow.getElementById("vic-photo-btn");
+    const vicCloseBtn = shadow.getElementById("vic-close-btn");
     const siteTitle = document.title || window.location.hostname;
     sitePill.textContent = window.location.hostname || siteTitle;
     photoSiteName.textContent = window.location.hostname || siteTitle;
@@ -8055,6 +8506,204 @@
         milestoneBanner.classList.remove("show");
       }, 4500);
     }
+    let toastTimer = null;
+    function showToast(msg) {
+      jahdarToast.textContent = msg;
+      jahdarToast.classList.add("show");
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        jahdarToast.classList.remove("show");
+      }, 3200);
+    }
+    function drawWatermark(ctx, w, h, pct, site, rank) {
+      const pad = 20;
+      const boxW = 340;
+      const boxH = 74;
+      const boxX = w - boxW - pad;
+      const boxY = h - boxH - pad;
+      ctx.save();
+      ctx.fillStyle = "rgba(9, 13, 22, 0.92)";
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(boxX, boxY, boxW, boxH, 12);
+      } else {
+        ctx.rect(boxX, boxY, boxW, boxH);
+      }
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(254, 240, 138, 0.25)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.direction = "rtl";
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#fef08a";
+      ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Cairo, Tahoma, sans-serif';
+      ctx.fillText("\u2694\uFE0F \u062C\u064E\u062D\u0652\u062F\u064E\u0631 \u2014 \u0642\u0627\u0647\u0631 \u0639\u0645\u0627\u0644\u0642\u0629 \u0627\u0644\u0648\u064A\u0628", boxX + boxW - 14, boxY + 25);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "600 12px monospace";
+      const rankStr = rank ? ` \u2022 \u0631\u062A\u0628\u0629 [${rank}]` : "";
+      ctx.fillText(`${site} \u2022 ${pct}% \u062F\u0645\u0627\u0631${rankStr}`, boxX + boxW - 14, boxY + 46);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "10px monospace";
+      const dateStr = (/* @__PURE__ */ new Date()).toLocaleDateString("ar-EG");
+      ctx.fillText(`JAHDAR WEB RUNTIME // ${dateStr}`, boxX + boxW - 14, boxY + 63);
+      ctx.restore();
+    }
+    function takePhotoScreenshot() {
+      sound.click();
+      if (photoFlash) {
+        photoFlash.style.opacity = "0.75";
+        setTimeout(() => {
+          photoFlash.style.opacity = "0";
+        }, 350);
+      }
+      try {
+        const offscreen = document.createElement("canvas");
+        offscreen.width = canvas.width;
+        offscreen.height = canvas.height;
+        const ctx = offscreen.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(canvas, 0, 0);
+        const pct100 = Math.min(100, Math.max(0, Math.round(latestStats.pct * 100)));
+        const rank = latestStats.pct >= 0.85 ? getDestructionRank(latestStats.time, latestStats.pct).rank : void 0;
+        drawWatermark(ctx, offscreen.width, offscreen.height, pct100, siteTitle, rank);
+        offscreen.toBlob((blob) => {
+          if (!blob) {
+            showToast("\u26A0\uFE0F \u062A\u0639\u0630\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0644\u0642\u0637\u0629 \u0627\u0644\u0634\u0627\u0634\u0629");
+            return;
+          }
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          const safeHost = (window.location.hostname || "site").replace(/[^a-zA-Z0-9_-]/g, "_");
+          a.download = `jahdar-${safeHost}-${Date.now()}.png`;
+          a.href = url;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 5e3);
+          showToast("\u{1F4F8} \u062A\u0645 \u0627\u0644\u062A\u0642\u0627\u0637 \u0648\u062D\u0641\u0638 \u0644\u0642\u0637\u0629 \u0627\u0644\u0634\u0627\u0634\u0629 \u0628\u0646\u062C\u0627\u062D!");
+        }, "image/png");
+      } catch (e) {
+        console.warn("Screenshot capture failed:", e);
+        showToast("\u26A0\uFE0F \u062A\u0645 \u062D\u0638\u0631 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0644\u0642\u0637\u0629 \u0628\u0633\u0628\u0628 \u0642\u064A\u0648\u062F \u062D\u0645\u0627\u064A\u0629 \u0627\u0644\u0645\u062A\u0635\u0641\u062D");
+      }
+    }
+    function showVictoryModal(info) {
+      const rankInfo = getDestructionRank(info.time, info.pct);
+      vicRankBadge.textContent = rankInfo.rank;
+      vicRankBadge.style.color = rankInfo.color;
+      vicRankBadge.style.borderColor = rankInfo.color;
+      vicRankBadge.style.boxShadow = `0 0 26px ${rankInfo.color}88`;
+      vicTitle.textContent = rankInfo.title;
+      vicDesc.textContent = rankInfo.desc;
+      vicTime.textContent = `${info.time} \u062B\u0627\u0646\u064A\u0629`;
+      vicPct.textContent = `${Math.min(100, Math.max(0, Math.round(info.pct * 100)))}%`;
+      vicBlocks.textContent = info.blocks.toString();
+      vicLetters.textContent = info.letters.toString();
+      vicExplosions.textContent = info.explosions.toString();
+      vicShots.textContent = info.shots.toString();
+      victoryModal.classList.add("show");
+      sound.complete();
+    }
+    function syncDrawerPills() {
+      const cfg = ConfigManager.get().getConfig();
+      skinPills.querySelectorAll(".drawer-pill").forEach((btn) => {
+        const s = btn.getAttribute("data-skin");
+        if (s === cfg.character.skin) btn.classList.add("active");
+        else btn.classList.remove("active");
+      });
+      physicsPills.querySelectorAll(".drawer-pill").forEach((btn) => {
+        const p = btn.getAttribute("data-physics");
+        if (p === currentPhysicsPreset) btn.classList.add("active");
+        else btn.classList.remove("active");
+      });
+      themePills.querySelectorAll(".drawer-pill").forEach((btn) => {
+        const t = btn.getAttribute("data-theme");
+        if (t === currentTheme) btn.classList.add("active");
+        else btn.classList.remove("active");
+      });
+      audioPills.querySelectorAll(".drawer-pill").forEach((btn) => {
+        const a = btn.getAttribute("data-audio");
+        if (a === cfg.audio.profile) btn.classList.add("active");
+        else btn.classList.remove("active");
+      });
+    }
+    function toggleSettingsDrawer() {
+      const isShow = settingsDrawer.classList.contains("show");
+      if (isShow) {
+        settingsDrawer.classList.remove("show");
+      } else {
+        syncDrawerPills();
+        settingsDrawer.classList.add("show");
+      }
+    }
+    settingsBtn.addEventListener("click", toggleSettingsDrawer);
+    drawerCloseBtn.addEventListener("click", () => settingsDrawer.classList.remove("show"));
+    skinPills.addEventListener("click", (e) => {
+      const target = e.target.closest(".drawer-pill");
+      if (!target) return;
+      const skin = target.getAttribute("data-skin");
+      if (skin && CHARACTER_SKINS[skin]) {
+        ConfigManager.get().selectCharacterSkin(skin);
+        syncDrawerPills();
+        sound.click();
+        showToast(`\u{1F3AD} \u0627\u0644\u0634\u062E\u0635\u064A\u0629: ${CHARACTER_SKINS[skin].nameAr}`);
+      }
+    });
+    physicsPills.addEventListener("click", (e) => {
+      const target = e.target.closest(".drawer-pill");
+      if (!target) return;
+      const preset = target.getAttribute("data-physics");
+      if (preset && PHYSICS_PRESETS[preset]) {
+        currentPhysicsPreset = preset;
+        ConfigManager.get().applyPhysicsPreset(preset);
+        syncDrawerPills();
+        sound.click();
+        showToast(`\u26A1 \u0641\u064A\u0632\u064A\u0627\u0621: ${PHYSICS_PRESETS[preset].name}`);
+      }
+    });
+    themePills.addEventListener("click", (e) => {
+      const target = e.target.closest(".drawer-pill");
+      if (!target) return;
+      const theme = target.getAttribute("data-theme");
+      if (theme && activeEngine) {
+        currentTheme = theme;
+        activeEngine.setBgTheme(theme);
+        syncDrawerPills();
+        sound.click();
+        const themeNames = {
+          cities: "\u0645\u062F\u064A\u0646\u0629 \u0627\u0644\u0633\u0627\u064A\u0628\u0631\u0628\u0627\u0646\u0643",
+          mountain: "\u0627\u0644\u063A\u0633\u0642 \u0627\u0644\u062C\u0628\u0644\u064A",
+          sunny: "\u0623\u0631\u0636 \u0627\u0644\u0634\u0645\u0633"
+        };
+        showToast(`\u{1F306} \u062E\u0644\u0641\u064A\u0629: ${themeNames[theme] || theme}`);
+      }
+    });
+    audioPills.addEventListener("click", (e) => {
+      const target = e.target.closest(".drawer-pill");
+      if (!target) return;
+      const profile = target.getAttribute("data-audio");
+      if (profile) {
+        ConfigManager.get().updateAudio({ profile });
+        syncDrawerPills();
+        sound.click();
+        const audioNames = {
+          retro: "\u0631\u064A\u062A\u0631\u0648 8-\u0628\u062A",
+          heavyBass: "\u0628\u064A\u0633 \u062B\u0642\u064A\u0644",
+          cinematic: "\u0633\u064A\u0646\u0645\u0627\u0626\u064A"
+        };
+        showToast(`\u{1F50A} \u0646\u0645\u0637 \u0627\u0644\u0635\u0648\u062A: ${audioNames[profile] || profile}`);
+      }
+    });
+    vicReloadBtn.addEventListener("click", () => {
+      window.location.reload();
+    });
+    vicPhotoBtn.addEventListener("click", () => {
+      takePhotoScreenshot();
+    });
+    vicCloseBtn.addEventListener("click", () => {
+      victoryModal.classList.remove("show");
+    });
     function togglePhotoMode() {
       isPhotoMode = !isPhotoMode;
       if (isPhotoMode) {
@@ -8072,7 +8721,7 @@
       muteBtn.textContent = isMuted ? "\u{1F507} \u0643\u062A\u0645" : "\u{1F50A} \u0635\u0648\u062A";
     }
     muteBtn.addEventListener("click", toggleMute);
-    photoBtn.addEventListener("click", togglePhotoMode);
+    photoBtn.addEventListener("click", takePhotoScreenshot);
     exitBtn.addEventListener("click", teardownJahdar);
     const onProgress = (msg, pct) => {
       splashStatus.textContent = msg;
@@ -8091,6 +8740,7 @@
       const engine = new DestroyEngine({
         onProgress,
         onStats: (stats) => {
+          latestStats = stats;
           const pct100 = Math.min(100, Math.max(0, Math.round(stats.pct * 100)));
           if (pct100 !== lastPct) {
             lastPct = pct100;
@@ -8115,6 +8765,14 @@
         },
         onComplete: (s) => {
           showMilestone({ pct: 100, titleAr: "\u0646\u0635\u0631 \u0643\u0627\u0633\u062D! \u062A\u0645 \u0645\u062D\u0648 \u0627\u0644\u0645\u0648\u0642\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644!", titleEn: "Total Obliteration!" });
+          showVictoryModal({
+            time: s.time,
+            pct: 1,
+            blocks: s.blocks,
+            letters: s.letters,
+            explosions: s.explosions,
+            shots: s.shots
+          });
         },
         onPauseRequest: () => {
         },
@@ -8124,7 +8782,7 @@
       });
       activeEngine = engine;
       engine.setCanvas(canvas);
-      await engine.startWithLevel(level, siteTitle, "grid");
+      await engine.startWithLevel(level, siteTitle, currentTheme);
       loadingSplash.style.opacity = "0";
       setTimeout(() => {
         loadingSplash.remove();
@@ -8140,12 +8798,26 @@
       const onKeyDown = (e) => {
         swallow(e);
         if (e.key === "Escape") {
+          if (victoryModal.classList.contains("show")) {
+            victoryModal.classList.remove("show");
+            return;
+          }
+          if (settingsDrawer.classList.contains("show")) {
+            settingsDrawer.classList.remove("show");
+            return;
+          }
           teardownJahdar();
           return;
         }
         if (e.key === "h" || e.key === "H") {
           if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-            togglePhotoMode();
+            takePhotoScreenshot();
+            return;
+          }
+        }
+        if (e.key === "l" || e.key === "L") {
+          if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            toggleSettingsDrawer();
             return;
           }
         }
