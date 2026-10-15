@@ -258,8 +258,9 @@ export async function extractLiveDocumentLevel(
     if (isBlockTag) blockId = ++blockIdCounter
 
     const rect = node.getBoundingClientRect()
-    const x = rect.left + scrollX
-    const y = rect.top + scrollY
+    const isFixed = cs.position === 'fixed'
+    const x = rect.left + (isFixed ? 0 : scrollX)
+    const y = rect.top + (isFixed ? 0 : scrollY)
     const w = rect.width
     const h = rect.height
 
@@ -269,8 +270,17 @@ export async function extractLiveDocumentLevel(
     const href = anchor ? anchor.getAttribute('href') : null
     const shadow = parseBoxShadow(cs.boxShadow)
 
-    const bwid = parseFloat(cs.borderLeftWidth) || 0
-    const hasBorder = bwid > 0 && parseColor(cs.borderLeftColor) !== null
+    const bwLeft = parseFloat(cs.borderLeftWidth) || 0
+    const bwRight = parseFloat(cs.borderRightWidth) || 0
+    const bwTop = parseFloat(cs.borderTopWidth) || 0
+    const bwBottom = parseFloat(cs.borderBottomWidth) || 0
+    const maxBw = Math.max(bwLeft, bwRight, bwTop, bwBottom)
+    const bc =
+      parseColor(cs.borderTopColor) ??
+      parseColor(cs.borderBottomColor) ??
+      parseColor(cs.borderLeftColor) ??
+      parseColor(cs.borderRightColor)
+    const hasBorder = maxBw > 0 && bc !== null
     const hasVisibleBackground = parseColor(cs.backgroundColor) !== null || /gradient\(/i.test(cs.backgroundImage || '')
     const visibleBox = (hasVisibleBackground || hasBorder || isImg || inlineSvg) && w >= 4 && h >= 4 && boxCount < MAX_BOXES
 
@@ -302,8 +312,7 @@ export async function extractLiveDocumentLevel(
       const isScenery = (w >= W - 12 && h >= H - 12) || (w >= W * 0.85 && h >= 220)
       let border: { w: number; c: string } | null = null
       if (hasBorder) {
-        const bc = parseColor(cs.borderLeftColor)
-        if (bc) border = { w: Math.min(10, bwid), c: bc }
+        border = { w: Math.min(10, maxBw), c: bc! }
       }
 
       boxes.push({
@@ -325,6 +334,49 @@ export async function extractLiveDocumentLevel(
         isScenery,
       })
       boxCount++
+    }
+
+    // Form Inputs & Textarea extraction (search bars, input text, placeholders)
+    const isInput = tag === 'input' || tag === 'textarea' || tag === 'select'
+    if (isInput && glyphCount < MAX_GLYPHS) {
+      const inputEl = node as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+      let inputVal = ''
+      if (tag === 'select') {
+        inputVal = (inputEl as HTMLSelectElement).selectedOptions?.[0]?.text || ''
+      } else {
+        inputVal = (inputEl as HTMLInputElement).value || (inputEl as HTMLInputElement).placeholder || ''
+      }
+      if (inputVal.trim().length > 0) {
+        const pcs = win.getComputedStyle(node)
+        const fs = parseFloat(pcs.fontSize) || 14
+        const fill = parseColor(pcs.color) ?? '#334155'
+        const fam = pcs.fontFamily || 'sans-serif'
+        const font = `${pcs.fontWeight || '400'} ${fs}px ${fam}`
+        const words = inputVal.trim().split(/\s+/)
+        let curWordX = x + 8
+        for (const wStr of words) {
+          if (!wStr || glyphCount >= MAX_GLYPHS) continue
+          const estW = Math.max(12, wStr.length * fs * 0.6)
+          glyphs.push({
+            ch: wStr,
+            x: curWordX,
+            y: y + Math.max(2, (h - fs) / 2),
+            w: Math.min(w - 12, estW),
+            h: fs * 1.2,
+            base: y + Math.max(2, (h - fs) / 2) + fs * 0.85,
+            fs,
+            font,
+            color: fill,
+            underline: false,
+            tag,
+            semanticRole: 'trigger',
+            blockId,
+          })
+          glyphCount++
+          curWordX += estW + 6
+          if (curWordX > x + w - 10) break
+        }
+      }
     }
 
     // Direct text child nodes
@@ -440,22 +492,30 @@ export async function extractLiveDocumentLevel(
     }
     if (curLine.length > 0) lines.push(curLine)
 
-    // 1. Intra-line: prevent horizontal word collision and maintain min gap
+    // 1. Intra-line: prevent horizontal word collision while respecting RTL direction
     for (const line of lines) {
       line.sort((a, b) => a.x - b.x)
       const dominantFs = Math.max(...line.map((w) => w.fs))
-      const minGap = Math.max(5, Math.round(dominantFs * 0.28))
       const maxBase = Math.max(...line.map((w) => w.base))
+      const isRtlLine = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF]/.test(
+        line.map((w) => w.ch).join('')
+      )
 
-      for (let k = 1; k < line.length; k++) {
-        const prev = line[k - 1]
-        const curr = line[k]
-        if (curr.x < prev.x + prev.w + minGap) {
-          curr.x = prev.x + prev.w + minGap
+      // Only adjust LTR lines that actually collide to avoid drifting RTL paragraphs outside containers
+      if (!isRtlLine) {
+        const minGap = Math.max(4, Math.round(dominantFs * 0.22))
+        for (let k = 1; k < line.length; k++) {
+          const prev = line[k - 1]
+          const curr = line[k]
+          if (curr.x < prev.x + prev.w + minGap) {
+            curr.x = prev.x + prev.w + minGap
+          }
         }
       }
+
       for (const curr of line) {
         curr.base = maxBase
+        curr.y = maxBase - dominantFs * 0.85
       }
     }
 

@@ -1304,8 +1304,13 @@ export class World {
         ctx.save()
         ctx.font = b.font || '16px sans-serif'
         ctx.fillStyle = b.color || '#ffffff'
-        ctx.textBaseline = 'top'
-        ctx.fillText(b.text || '', scrX, scrY)
+        if (b.baseY !== undefined) {
+          ctx.textBaseline = 'alphabetic'
+          ctx.fillText(b.text || '', scrX, b.baseY - camY)
+        } else {
+          ctx.textBaseline = 'top'
+          ctx.fillText(b.text || '', scrX, scrY)
+        }
         if (b.underline) {
           ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.5)
         }
@@ -1364,8 +1369,13 @@ export class World {
         ctx.save()
         ctx.font = b.font || '16px sans-serif'
         ctx.fillStyle = b.color || '#ffffff'
-        ctx.textBaseline = 'top'
-        ctx.fillText(b.text || '', scrX, scrY)
+        if (b.baseY !== undefined) {
+          ctx.textBaseline = 'alphabetic'
+          ctx.fillText(b.text || '', scrX, b.baseY - camY)
+        } else {
+          ctx.textBaseline = 'top'
+          ctx.fillText(b.text || '', scrX, scrY)
+        }
         ctx.restore()
       } else if (b.kind === 'box') {
         drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, null)
@@ -2057,7 +2067,7 @@ function generateMasonrySlabs(
   return shards
 }
 
-// Generate letter/syllable fragments from fractured words
+// Generate letter/syllable fragments from fractured words with Arabic RTL & ligature preservation
 function generateWordShards(
   body: SolidBody,
   hitX: number,
@@ -2070,16 +2080,49 @@ function generateWordShards(
   const txt = body.text || ''
   if (!txt) return shards
 
-  const clusters: { str: string; relX: number }[] = []
+  const isRtl = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(txt)
+  const nonConnectingAfter = new Set(['ا', 'أ', 'إ', 'آ', 'د', 'ذ', 'ر', 'ز', 'و', 'ؤ', 'ة', 'ء', ' '])
+
+  const rawSlices: string[] = []
   if (txt.length <= 3) {
     for (let i = 0; i < txt.length; i++) {
-      clusters.push({ str: txt[i], relX: (body.w / txt.length) * (i + 0.5) })
+      rawSlices.push(txt[i])
     }
   } else {
     for (let i = 0; i < txt.length; i += 2) {
-      const sub = txt.slice(i, i + 2)
-      clusters.push({ str: sub, relX: (body.w / txt.length) * (i + sub.length / 2) })
+      rawSlices.push(txt.slice(i, i + 2))
     }
+  }
+
+  const clusters: { str: string; relX: number }[] = []
+  const count = rawSlices.length
+
+  for (let k = 0; k < count; k++) {
+    let sliceStr = rawSlices[k]
+
+    if (isRtl && count > 1) {
+      // Preserve cursive Arabic ligatures with tatweel (\u0640)
+      const isFirst = k === 0
+      const isLast = k === count - 1
+      const lastChar = sliceStr[sliceStr.length - 1]
+
+      if (isFirst) {
+        if (!nonConnectingAfter.has(lastChar)) sliceStr = sliceStr + 'ـ'
+      } else if (isLast) {
+        sliceStr = 'ـ' + sliceStr
+      } else {
+        const prefix = 'ـ'
+        const suffix = !nonConnectingAfter.has(lastChar) ? 'ـ' : ''
+        sliceStr = prefix + sliceStr + suffix
+      }
+    }
+
+    // In RTL, index 0 is on the right side of the word box
+    const relX = isRtl
+      ? body.w - (body.w / count) * (k + 0.5)
+      : (body.w / count) * (k + 0.5)
+
+    clusters.push({ str: sliceStr, relX })
   }
 
   for (const c of clusters) {

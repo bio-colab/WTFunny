@@ -1295,8 +1295,13 @@
           ctx.save();
           ctx.font = b.font || "16px sans-serif";
           ctx.fillStyle = b.color || "#ffffff";
-          ctx.textBaseline = "top";
-          ctx.fillText(b.text || "", scrX, scrY);
+          if (b.baseY !== void 0) {
+            ctx.textBaseline = "alphabetic";
+            ctx.fillText(b.text || "", scrX, b.baseY - camY);
+          } else {
+            ctx.textBaseline = "top";
+            ctx.fillText(b.text || "", scrX, scrY);
+          }
           if (b.underline) {
             ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.5);
           }
@@ -1349,8 +1354,13 @@
           ctx.save();
           ctx.font = b.font || "16px sans-serif";
           ctx.fillStyle = b.color || "#ffffff";
-          ctx.textBaseline = "top";
-          ctx.fillText(b.text || "", scrX, scrY);
+          if (b.baseY !== void 0) {
+            ctx.textBaseline = "alphabetic";
+            ctx.fillText(b.text || "", scrX, b.baseY - camY);
+          } else {
+            ctx.textBaseline = "top";
+            ctx.fillText(b.text || "", scrX, scrY);
+          }
           ctx.restore();
         } else if (b.kind === "box") {
           drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, null);
@@ -1921,16 +1931,38 @@
     const shards = [];
     const txt = body.text || "";
     if (!txt) return shards;
-    const clusters = [];
+    const isRtl = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(txt);
+    const nonConnectingAfter = /* @__PURE__ */ new Set(["\u0627", "\u0623", "\u0625", "\u0622", "\u062F", "\u0630", "\u0631", "\u0632", "\u0648", "\u0624", "\u0629", "\u0621", " "]);
+    const rawSlices = [];
     if (txt.length <= 3) {
       for (let i = 0; i < txt.length; i++) {
-        clusters.push({ str: txt[i], relX: body.w / txt.length * (i + 0.5) });
+        rawSlices.push(txt[i]);
       }
     } else {
       for (let i = 0; i < txt.length; i += 2) {
-        const sub = txt.slice(i, i + 2);
-        clusters.push({ str: sub, relX: body.w / txt.length * (i + sub.length / 2) });
+        rawSlices.push(txt.slice(i, i + 2));
       }
+    }
+    const clusters = [];
+    const count = rawSlices.length;
+    for (let k = 0; k < count; k++) {
+      let sliceStr = rawSlices[k];
+      if (isRtl && count > 1) {
+        const isFirst = k === 0;
+        const isLast = k === count - 1;
+        const lastChar = sliceStr[sliceStr.length - 1];
+        if (isFirst) {
+          if (!nonConnectingAfter.has(lastChar)) sliceStr = sliceStr + "\u0640";
+        } else if (isLast) {
+          sliceStr = "\u0640" + sliceStr;
+        } else {
+          const prefix = "\u0640";
+          const suffix = !nonConnectingAfter.has(lastChar) ? "\u0640" : "";
+          sliceStr = prefix + sliceStr + suffix;
+        }
+      }
+      const relX = isRtl ? body.w - body.w / count * (k + 0.5) : body.w / count * (k + 0.5);
+      clusters.push({ str: sliceStr, relX });
     }
     for (const c of clusters) {
       const wx = body.x + c.relX;
@@ -6654,8 +6686,9 @@
       const isBlockTag = /^(p|h[1-6]|li|blockquote|pre|td|th|dt|dd|article|section|header|footer|aside)$/i.test(tag) || isButton || isHeading;
       if (isBlockTag) blockId = ++blockIdCounter;
       const rect = node.getBoundingClientRect();
-      const x = rect.left + scrollX;
-      const y = rect.top + scrollY;
+      const isFixed = cs.position === "fixed";
+      const x = rect.left + (isFixed ? 0 : scrollX);
+      const y = rect.top + (isFixed ? 0 : scrollY);
       const w = rect.width;
       const h = rect.height;
       const isImg = tag === "img";
@@ -6663,8 +6696,13 @@
       const anchor = node.closest("a");
       const href = anchor ? anchor.getAttribute("href") : null;
       const shadow = parseBoxShadow2(cs.boxShadow);
-      const bwid = parseFloat(cs.borderLeftWidth) || 0;
-      const hasBorder = bwid > 0 && parseColor2(cs.borderLeftColor) !== null;
+      const bwLeft = parseFloat(cs.borderLeftWidth) || 0;
+      const bwRight = parseFloat(cs.borderRightWidth) || 0;
+      const bwTop = parseFloat(cs.borderTopWidth) || 0;
+      const bwBottom = parseFloat(cs.borderBottomWidth) || 0;
+      const maxBw = Math.max(bwLeft, bwRight, bwTop, bwBottom);
+      const bc = parseColor2(cs.borderTopColor) ?? parseColor2(cs.borderBottomColor) ?? parseColor2(cs.borderLeftColor) ?? parseColor2(cs.borderRightColor);
+      const hasBorder = maxBw > 0 && bc !== null;
       const hasVisibleBackground = parseColor2(cs.backgroundColor) !== null || /gradient\(/i.test(cs.backgroundImage || "");
       const visibleBox = (hasVisibleBackground || hasBorder || isImg || inlineSvg) && w >= 4 && h >= 4 && boxCount < MAX_BOXES2;
       if (visibleBox) {
@@ -6692,8 +6730,7 @@
         const isScenery = w >= W2 - 12 && h >= H - 12 || w >= W2 * 0.85 && h >= 220;
         let border = null;
         if (hasBorder) {
-          const bc = parseColor2(cs.borderLeftColor);
-          if (bc) border = { w: Math.min(10, bwid), c: bc };
+          border = { w: Math.min(10, maxBw), c: bc };
         }
         boxes.push({
           x,
@@ -6714,6 +6751,47 @@
           isScenery
         });
         boxCount++;
+      }
+      const isInput = tag === "input" || tag === "textarea" || tag === "select";
+      if (isInput && glyphCount < MAX_GLYPHS2) {
+        const inputEl = node;
+        let inputVal = "";
+        if (tag === "select") {
+          inputVal = inputEl.selectedOptions?.[0]?.text || "";
+        } else {
+          inputVal = inputEl.value || inputEl.placeholder || "";
+        }
+        if (inputVal.trim().length > 0) {
+          const pcs = win.getComputedStyle(node);
+          const fs = parseFloat(pcs.fontSize) || 14;
+          const fill = parseColor2(pcs.color) ?? "#334155";
+          const fam = pcs.fontFamily || "sans-serif";
+          const font = `${pcs.fontWeight || "400"} ${fs}px ${fam}`;
+          const words = inputVal.trim().split(/\s+/);
+          let curWordX = x + 8;
+          for (const wStr of words) {
+            if (!wStr || glyphCount >= MAX_GLYPHS2) continue;
+            const estW = Math.max(12, wStr.length * fs * 0.6);
+            glyphs.push({
+              ch: wStr,
+              x: curWordX,
+              y: y + Math.max(2, (h - fs) / 2),
+              w: Math.min(w - 12, estW),
+              h: fs * 1.2,
+              base: y + Math.max(2, (h - fs) / 2) + fs * 0.85,
+              fs,
+              font,
+              color: fill,
+              underline: false,
+              tag,
+              semanticRole: "trigger",
+              blockId
+            });
+            glyphCount++;
+            curWordX += estW + 6;
+            if (curWordX > x + w - 10) break;
+          }
+        }
       }
       if (glyphCount < MAX_GLYPHS2) {
         const childNodes = Array.from(node.childNodes);
@@ -6817,17 +6895,23 @@
       for (const line of lines) {
         line.sort((a, b) => a.x - b.x);
         const dominantFs = Math.max(...line.map((w) => w.fs));
-        const minGap = Math.max(5, Math.round(dominantFs * 0.28));
         const maxBase = Math.max(...line.map((w) => w.base));
-        for (let k = 1; k < line.length; k++) {
-          const prev = line[k - 1];
-          const curr = line[k];
-          if (curr.x < prev.x + prev.w + minGap) {
-            curr.x = prev.x + prev.w + minGap;
+        const isRtlLine = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF]/.test(
+          line.map((w) => w.ch).join("")
+        );
+        if (!isRtlLine) {
+          const minGap = Math.max(4, Math.round(dominantFs * 0.22));
+          for (let k = 1; k < line.length; k++) {
+            const prev = line[k - 1];
+            const curr = line[k];
+            if (curr.x < prev.x + prev.w + minGap) {
+              curr.x = prev.x + prev.w + minGap;
+            }
           }
         }
         for (const curr of line) {
           curr.base = maxBase;
+          curr.y = maxBase - dominantFs * 0.85;
         }
       }
       for (let l = 1; l < lines.length; l++) {
