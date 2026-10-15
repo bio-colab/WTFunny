@@ -479,7 +479,8 @@ export function stepEntities(world: World, es: WeaponEntities, dt: number, playe
             world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true })
           }
           const pan = Math.max(-1, Math.min(1, (b.x / world.W) * 2 - 1))
-          sound.hit(Math.random() < 0.5 ? 'paper' : 'block', 0.8, pan)
+          const hitSound = bodyHit?.semanticRole === 'structure' ? 'metal' : Math.random() < 0.5 ? 'paper' : 'block'
+          sound.hit(hitSound, 0.8, pan)
           // spark
           for (let k = 0; k < 3; k++) {
             world.spawnParticle({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300, life: 0.2, max: 0.2, kind: 'spark', color: '#ffd23d', size: 2 })

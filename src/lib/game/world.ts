@@ -3,6 +3,7 @@
 // rigid-body physics, kinetic impulse, dislodging, and polygon/glyph fracturing.
 
 import { ConfigManager } from './engineConfig'
+import { sound } from './sound'
 
 export const CELL = 1
 export const SKY_ROWS = 160
@@ -208,6 +209,7 @@ export class World {
 
   onElementGone?: (el: LevelElement) => void
   onShatter?: (b: SolidBody, force: number) => void
+  onPortalShatter?: (wx: number, wy: number) => void
   onCellDestroyed?: (wx: number, wy: number, colorABGR: number) => void
 
   init(W: number, H: number) {
@@ -622,12 +624,31 @@ export class World {
     const b = this.findBodyAt(wx, wy)
     if (!b || b.destroyed) return null
 
-    b.hp -= dmg
+    // Structural fortification: 'structure' has 35% damage absorption
+    const effDmg = b.semanticRole === 'structure' ? Math.max(1, Math.round(dmg * 0.65)) : dmg
+    b.hp -= effDmg
     b.damageDecals.push({
       rx: Math.max(2, Math.min(b.w - 2, wx - b.x)),
       ry: Math.max(2, Math.min(b.h - 2, wy - b.y)),
-      r: Math.min(8, 2 + dmg * 0.12),
+      r: Math.min(8, 2 + effDmg * 0.12),
     })
+
+    if (b.semanticRole === 'structure') {
+      sound.hit('metal', 0.5)
+      for (let i = 0; i < 3; i++) {
+        this.spawnParticle({
+          x: wx,
+          y: wy,
+          vx: -impulseX * 0.2 + (Math.random() - 0.5) * 120,
+          vy: -impulseY * 0.2 - Math.random() * 100,
+          life: 0.18,
+          max: 0.18,
+          kind: 'spark',
+          color: '#fbbf24',
+          size: 2,
+        })
+      }
+    }
 
     // Guard large anchored bodies from overeager dislodging:
     const impulseMag = Math.hypot(impulseX, impulseY)
@@ -729,6 +750,52 @@ export class World {
 
     // Trigger hit-stop and high-impact camera shake callback
     this.onShatter?.(b, force)
+
+    // Tactical Semantic Roles: Trigger (chain explosion), Portal (quantum fuel drop), Structure (heavy shockwave)
+    if (b.semanticRole === 'trigger') {
+      const cx = b.x + b.w / 2
+      const cy = b.y + b.h / 2
+      this.puffAt(cx, cy, 28)
+      this.damageCircle(cx, cy, 65, { scorch: true, impulse: 360 })
+      sound.boom(0.8)
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2
+        this.spawnParticle({
+          x: cx,
+          y: cy,
+          vx: Math.cos(a) * (180 + Math.random() * 120),
+          vy: Math.sin(a) * (180 + Math.random() * 120),
+          life: 0.45,
+          max: 0.45,
+          kind: 'spark',
+          color: Math.random() < 0.5 ? '#f59e0b' : '#ef4444',
+          size: 3,
+        })
+      }
+    } else if (b.semanticRole === 'portal') {
+      const cx = b.x + b.w / 2
+      const cy = b.y + b.h / 2
+      this.onPortalShatter?.(cx, cy)
+      for (let i = 0; i < 14; i++) {
+        const a = Math.random() * Math.PI * 2
+        this.spawnParticle({
+          x: cx,
+          y: cy,
+          vx: Math.cos(a) * (120 + Math.random() * 100),
+          vy: Math.sin(a) * (120 + Math.random() * 100) - 50,
+          life: 0.6,
+          max: 0.6,
+          kind: 'star',
+          color: Math.random() < 0.6 ? '#38bdf8' : '#ec4899',
+          size: 3.5,
+        })
+      }
+    } else if (b.semanticRole === 'structure') {
+      const cx = b.x + b.w / 2
+      const cy = b.y + b.h / 2
+      this.puffAt(cx, cy, 36)
+      sound.hit('metal', 0.9)
+    }
 
     // Generate physical shards based on material classification
     if (b.kind === 'word') {
@@ -1329,8 +1396,9 @@ export class World {
           ctx.textBaseline = 'top'
           ctx.fillText(b.text || '', scrX, scrY)
         }
-        if (b.underline) {
-          ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.5)
+        if (b.semanticRole === 'portal' || b.underline) {
+          ctx.fillStyle = b.semanticRole === 'portal' ? 'rgba(56, 189, 248, 0.75)' : b.color || '#ffffff'
+          ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.6)
         }
         // Draw bullet hole / damage decals
         if (b.damageDecals.length > 0) {
@@ -1344,6 +1412,15 @@ export class World {
         ctx.restore()
       } else if (b.kind === 'box') {
         drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, b.shadow)
+        if (b.semanticRole === 'trigger') {
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)'
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(scrX - 1, scrY - 1, b.w + 2, b.h + 2)
+        } else if (b.semanticRole === 'portal') {
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)'
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(scrX - 1, scrY - 1, b.w + 2, b.h + 2)
+        }
         // Decals
         if (b.damageDecals.length > 0) {
           ctx.fillStyle = 'rgba(20, 20, 20, 0.75)'

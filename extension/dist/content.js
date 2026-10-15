@@ -333,6 +333,631 @@
     }
   };
 
+  // src/lib/game/sound.ts
+  var SoundEngine = class {
+    constructor() {
+      this.ctx = null;
+      this.master = null;
+      this.bassFilter = null;
+      this.busFx = null;
+      this.busBoom = null;
+      this.busUi = null;
+      this.noiseBuf = null;
+      this.loops = /* @__PURE__ */ new Map();
+      this.subscribed = false;
+      this.muted = false;
+    }
+    ensure() {
+      if (this.ctx) {
+        if (this.ctx.state === "suspended") void this.ctx.resume();
+        return;
+      }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC({ latencyHint: "interactive" });
+      const comp = this.ctx.createDynamicsCompressor();
+      comp.threshold.value = -10;
+      comp.knee.value = 8;
+      comp.ratio.value = 4;
+      comp.attack.value = 3e-3;
+      comp.release.value = 0.2;
+      this.bassFilter = this.ctx.createBiquadFilter();
+      this.bassFilter.type = "lowshelf";
+      this.bassFilter.frequency.value = 110;
+      this.bassFilter.gain.value = 0;
+      this.master = this.ctx.createGain();
+      comp.connect(this.bassFilter);
+      this.bassFilter.connect(this.master);
+      this.master.connect(this.ctx.destination);
+      this.busFx = this.ctx.createGain();
+      this.busBoom = this.ctx.createGain();
+      this.busUi = this.ctx.createGain();
+      this.busFx.connect(comp);
+      this.busBoom.connect(comp);
+      this.busUi.connect(comp);
+      this.syncConfig();
+      if (!this.subscribed && typeof window !== "undefined") {
+        this.subscribed = true;
+        ConfigManager.get().subscribe(() => this.syncConfig());
+      }
+      const len = this.ctx.sampleRate * 2;
+      this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    syncConfig() {
+      if (!this.ctx || !this.master) return;
+      const cfg = ConfigManager.get().getConfig().audio;
+      const isMuted = this.muted || cfg.muted;
+      const masterVol = isMuted ? 0 : cfg.masterVolume ?? 0.85;
+      const sfxVol = cfg.sfxVolume ?? 1;
+      const profileMul = cfg.profile === "heavy" ? 1.25 : cfg.profile === "retro" ? 0.9 : 1;
+      this.master.gain.setTargetAtTime(masterVol, this.ctx.currentTime, 0.03);
+      if (this.busFx) this.busFx.gain.setTargetAtTime(sfxVol * profileMul, this.ctx.currentTime, 0.03);
+      if (this.busBoom) this.busBoom.gain.setTargetAtTime(sfxVol * (cfg.bassBoost ? 1.45 : 1) * profileMul, this.ctx.currentTime, 0.03);
+      if (this.busUi) this.busUi.gain.setTargetAtTime(sfxVol, this.ctx.currentTime, 0.03);
+      if (this.bassFilter) this.bassFilter.gain.setTargetAtTime(cfg.bassBoost ? 8 : 0, this.ctx.currentTime, 0.03);
+    }
+    setMuted(m) {
+      this.muted = m;
+      this.syncConfig();
+    }
+    getPitchMultiplier() {
+      const cfg = ConfigManager.get().getConfig().audio;
+      const variance = cfg?.pitchVariance ?? 0.08;
+      return 1 + (Math.random() - 0.5) * 2 * variance;
+    }
+    noise(dur) {
+      if (!this.ctx || !this.noiseBuf) return null;
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuf;
+      src.loop = true;
+      src.start(this.ctx.currentTime, Math.random() * 1.5, dur + 0.05);
+      return src;
+    }
+    env(gain, t0, a, peak, d) {
+      gain.gain.setValueAtTime(1e-4, t0);
+      gain.gain.linearRampToValueAtTime(peak, t0 + a);
+      gain.gain.exponentialRampToValueAtTime(1e-4, t0 + a + d);
+    }
+    out(bus, pan) {
+      if (!this.ctx) return null;
+      const b = bus === "boom" ? this.busBoom : bus === "ui" ? this.busUi : this.busFx;
+      if (!b) return null;
+      if (this.ctx.createStereoPanner) {
+        const p = this.ctx.createStereoPanner();
+        p.pan.value = Math.max(-1, Math.min(1, pan));
+        p.connect(b);
+        return p;
+      }
+      return b;
+    }
+    // gunshot-ish: noise burst through lowpass + tiny click
+    shot(kind, vol = 1, pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const dur = kind === "shotgun" ? 0.28 : kind === "pistol" ? 0.14 : 0.09;
+      const pm = this.getPitchMultiplier();
+      const n = this.noise(dur);
+      const f = ctx.createBiquadFilter();
+      f.type = "lowpass";
+      const base = (kind === "shotgun" ? 1400 : kind === "pistol" ? 2e3 : 2600) * pm;
+      f.frequency.setValueAtTime(base, t);
+      f.frequency.exponentialRampToValueAtTime(base * 0.25, t + dur);
+      const g = ctx.createGain();
+      this.env(g, t, 2e-3, (kind === "shotgun" ? 0.55 : 0.3) * vol, dur);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+      const osc = ctx.createOscillator();
+      osc.type = "square";
+      osc.frequency.setValueAtTime((kind === "shotgun" ? 320 : 700) * pm, t);
+      const g2 = ctx.createGain();
+      this.env(g2, t, 1e-3, 0.12 * vol, 0.03);
+      osc.connect(g2);
+      g2.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.05);
+      if (kind === "shotgun") {
+        const osc2 = ctx.createOscillator();
+        osc2.type = "sine";
+        osc2.frequency.setValueAtTime(110 * pm, t);
+        osc2.frequency.exponentialRampToValueAtTime(45 * pm, t + 0.25);
+        const g3 = ctx.createGain();
+        this.env(g3, t, 4e-3, 0.5 * vol, 0.25);
+        osc2.connect(g3);
+        g3.connect(this.out("boom", pan) ?? o);
+        osc2.start(t);
+        osc2.stop(t + 0.3);
+      }
+    }
+    boom(power = 1, pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("boom", pan);
+      if (!o) return;
+      const pm = this.getPitchMultiplier();
+      const dur = 0.7 * power;
+      const n = this.noise(dur);
+      const f = ctx.createBiquadFilter();
+      f.type = "lowpass";
+      f.frequency.setValueAtTime(3e3 * pm, t);
+      f.frequency.exponentialRampToValueAtTime(120 * pm, t + dur);
+      const g = ctx.createGain();
+      this.env(g, t, 5e-3, 0.9 * power, dur);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+      const sub = ctx.createOscillator();
+      sub.type = "sine";
+      sub.frequency.setValueAtTime(160 * power * pm, t);
+      sub.frequency.exponentialRampToValueAtTime(30 * pm, t + dur * 0.9);
+      const g2 = ctx.createGain();
+      this.env(g2, t, 5e-3, 0.8 * power, dur * 0.9);
+      sub.connect(g2);
+      g2.connect(o);
+      sub.start(t);
+      sub.stop(t + dur);
+    }
+    explode(power = 1, pan = 0) {
+      this.boom(power, pan);
+    }
+    rail(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("boom", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(3800, t);
+      osc.frequency.exponentialRampToValueAtTime(180, t + 0.3);
+      const g = ctx.createGain();
+      this.env(g, t, 3e-3, 0.5, 0.3);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.35);
+      const n = this.noise(0.25);
+      const f = ctx.createBiquadFilter();
+      f.type = "highpass";
+      f.frequency.value = 1200;
+      const g2 = ctx.createGain();
+      this.env(g2, t, 2e-3, 0.4, 0.25);
+      n?.connect(f);
+      f.connect(g2);
+      g2.connect(o);
+    }
+    railCharge(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(180, t);
+      osc.frequency.exponentialRampToValueAtTime(1500, t + 0.5);
+      const g = ctx.createGain();
+      this.env(g, t, 0.1, 0.18, 0.45);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.6);
+    }
+    whoosh(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const n = this.noise(0.5);
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.setValueAtTime(400, t);
+      f.frequency.exponentialRampToValueAtTime(2400, t + 0.4);
+      f.Q.value = 1.2;
+      const g = ctx.createGain();
+      this.env(g, t, 0.03, 0.4, 0.45);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+    }
+    flameBurst(vol = 1, pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const n = this.noise(0.22);
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 900 + Math.random() * 700;
+      f.Q.value = 0.7;
+      const g = ctx.createGain();
+      this.env(g, t, 0.02, 0.16 * vol, 0.2);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+    }
+    hit(kind, vol = 1, pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const pm = this.getPitchMultiplier();
+      const n = this.noise(0.08);
+      const f = ctx.createBiquadFilter();
+      f.type = kind === "paper" ? "highpass" : kind === "image" ? "bandpass" : kind === "metal" ? "bandpass" : "lowpass";
+      f.frequency.value = (kind === "paper" ? 2500 : kind === "image" ? 1800 : kind === "metal" ? 3200 : 700) * pm;
+      if (kind === "metal") f.Q.value = 5.5;
+      const g = ctx.createGain();
+      this.env(g, t, 1e-3, (kind === "metal" ? 0.28 : kind === "block" ? 0.22 : 0.14) * vol, kind === "metal" ? 0.11 : 0.07);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+      if (kind === "metal") {
+        const osc = ctx.createOscillator();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(2200 * pm, t);
+        osc.frequency.exponentialRampToValueAtTime(1100, t + 0.11);
+        const g2 = ctx.createGain();
+        this.env(g2, t, 1e-3, 0.16 * vol, 0.11);
+        osc.connect(g2);
+        g2.connect(o);
+        osc.start(t);
+        osc.stop(t + 0.13);
+      }
+    }
+    pop(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(600 + Math.random() * 500, t);
+      osc.frequency.exponentialRampToValueAtTime(150, t + 0.08);
+      const g = ctx.createGain();
+      this.env(g, t, 2e-3, 0.2, 0.08);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    }
+    chutePop(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const n = this.noise(0.15);
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.setValueAtTime(600, t);
+      f.frequency.exponentialRampToValueAtTime(1600, t + 0.12);
+      const g = ctx.createGain();
+      this.env(g, t, 4e-3, 0.3, 0.14);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+    }
+    split(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(900, t);
+      osc.frequency.exponentialRampToValueAtTime(2400, t + 0.15);
+      const g = ctx.createGain();
+      this.env(g, t, 5e-3, 0.25, 0.15);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.2);
+    }
+    jet(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const n = this.noise(0.3);
+      const f = ctx.createBiquadFilter();
+      f.type = "lowpass";
+      f.frequency.value = 800;
+      const g = ctx.createGain();
+      this.env(g, t, 0.03, 0.1, 0.26);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+    }
+    // Magical arpeggio for the wand
+    wandCast(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("boom", pan);
+      if (!o) return;
+      const notes = [523, 659, 784, 1046, 1318];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        const t0 = t + i * 0.08;
+        g.gain.setValueAtTime(1e-4, t0);
+        g.gain.linearRampToValueAtTime(0.16, t0 + 0.02);
+        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.5);
+        osc.connect(g);
+        g.connect(o);
+        osc.start(t0);
+        osc.stop(t0 + 0.55);
+      });
+    }
+    wandBlast(power = 1, pan = 0) {
+      this.boom(1.2 * power, pan);
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("boom", pan);
+      if (!o) return;
+      [1318, 1568, 2093].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(1e-4, t);
+        g.gain.linearRampToValueAtTime(0.12, t + 0.02 + i * 0.04);
+        g.gain.exponentialRampToValueAtTime(1e-4, t + 0.8);
+        osc.connect(g);
+        g.connect(o);
+        osc.start(t);
+        osc.stop(t + 0.85);
+      });
+    }
+    starHum(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("boom", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(60, t);
+      osc.frequency.linearRampToValueAtTime(52, t + 2.5);
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 6.5;
+      const lg = ctx.createGain();
+      lg.gain.value = 8;
+      lfo.connect(lg);
+      lg.connect(osc.frequency);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(1e-4, t);
+      g.gain.linearRampToValueAtTime(0.4, t + 0.3);
+      g.gain.setValueAtTime(0.4, t + 2.2);
+      g.gain.exponentialRampToValueAtTime(1e-4, t + 2.8);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 2.9);
+      lfo.start(t);
+      lfo.stop(t + 2.9);
+    }
+    droneBeep(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "square";
+      osc.frequency.value = 1200;
+      const g = ctx.createGain();
+      this.env(g, t, 5e-3, 0.08, 0.09);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    }
+    switch(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", pan);
+      if (!o) return;
+      const n = this.noise(0.05);
+      const f = ctx.createBiquadFilter();
+      f.type = "highpass";
+      f.frequency.value = 1800;
+      const g = ctx.createGain();
+      this.env(g, t, 1e-3, 0.15, 0.05);
+      n?.connect(f);
+      f.connect(g);
+      g.connect(o);
+    }
+    click() {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", 0);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "square";
+      osc.frequency.value = 880;
+      const g = ctx.createGain();
+      this.env(g, t, 1e-3, 0.08, 0.04);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.06);
+    }
+    start() {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", 0);
+      if (!o) return;
+      [392, 523, 659, 784].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        const t0 = t + i * 0.09;
+        g.gain.setValueAtTime(1e-4, t0);
+        g.gain.linearRampToValueAtTime(0.14, t0 + 0.02);
+        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.4);
+        osc.connect(g);
+        g.connect(o);
+        osc.start(t0);
+        osc.stop(t0 + 0.45);
+      });
+    }
+    complete() {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", 0);
+      if (!o) return;
+      [523, 659, 784, 1046, 784, 1046, 1318].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        const t0 = t + i * 0.13;
+        g.gain.setValueAtTime(1e-4, t0);
+        g.gain.linearRampToValueAtTime(0.16, t0 + 0.02);
+        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.6);
+        osc.connect(g);
+        g.connect(o);
+        osc.start(t0);
+        osc.stop(t0 + 0.65);
+      });
+    }
+    jump(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(300, t);
+      osc.frequency.exponentialRampToValueAtTime(650, t + 0.12);
+      const g = ctx.createGain();
+      this.env(g, t, 4e-3, 0.12, 0.12);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    }
+    // Mid-air flip double-jump sound: rising sine whoosh with chirp
+    flip(pan = 0) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("fx", pan);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(520, t);
+      osc.frequency.exponentialRampToValueAtTime(1100, t + 0.16);
+      const g = ctx.createGain();
+      this.env(g, t, 3e-3, 0.15, 0.16);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.18);
+      const n = this.noise(0.14);
+      if (n) {
+        const f = ctx.createBiquadFilter();
+        f.type = "bandpass";
+        f.frequency.setValueAtTime(1200, t);
+        f.Q.value = 2;
+        const ng = ctx.createGain();
+        this.env(ng, t, 5e-3, 0.1, 0.14);
+        n.connect(f);
+        f.connect(ng);
+        ng.connect(o);
+      }
+    }
+    // Milestone announcement sound (e.g. 25%, 50%, 75%, 100% destroyed)
+    milestone() {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", 0);
+      if (!o) return;
+      const notes = [587.33, 739.99, 880, 1174.66];
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        osc.type = "square";
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        const t0 = t + idx * 0.07;
+        g.gain.setValueAtTime(1e-4, t0);
+        g.gain.linearRampToValueAtTime(0.12, t0 + 0.015);
+        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.35);
+        osc.connect(g);
+        g.connect(o);
+        osc.start(t0);
+        osc.stop(t0 + 0.38);
+      });
+    }
+    // UI feedback chirp for Game Lab adjustments
+    labBeep(pitchHigh = false) {
+      this.ensure();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = this.out("ui", 0);
+      if (!o) return;
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(pitchHigh ? 880 : 540, t);
+      osc.frequency.exponentialRampToValueAtTime(pitchHigh ? 1320 : 720, t + 0.06);
+      const g = ctx.createGain();
+      this.env(g, t, 2e-3, 0.09, 0.06);
+      osc.connect(g);
+      g.connect(o);
+      osc.start(t);
+      osc.stop(t + 0.08);
+    }
+    land(pan = 0) {
+      this.hit("block", 0.7, pan);
+    }
+  };
+  var sound = new SoundEngine();
+
   // src/lib/game/world.ts
   var CELL = 1;
   var SKY_ROWS = 160;
@@ -719,12 +1344,29 @@
     hitBodyAt(wx, wy, dmg, impulseX = 0, impulseY = 0) {
       const b = this.findBodyAt(wx, wy);
       if (!b || b.destroyed) return null;
-      b.hp -= dmg;
+      const effDmg = b.semanticRole === "structure" ? Math.max(1, Math.round(dmg * 0.65)) : dmg;
+      b.hp -= effDmg;
       b.damageDecals.push({
         rx: Math.max(2, Math.min(b.w - 2, wx - b.x)),
         ry: Math.max(2, Math.min(b.h - 2, wy - b.y)),
-        r: Math.min(8, 2 + dmg * 0.12)
+        r: Math.min(8, 2 + effDmg * 0.12)
       });
+      if (b.semanticRole === "structure") {
+        sound.hit("metal", 0.5);
+        for (let i = 0; i < 3; i++) {
+          this.spawnParticle({
+            x: wx,
+            y: wy,
+            vx: -impulseX * 0.2 + (Math.random() - 0.5) * 120,
+            vy: -impulseY * 0.2 - Math.random() * 100,
+            life: 0.18,
+            max: 0.18,
+            kind: "spark",
+            color: "#fbbf24",
+            size: 2
+          });
+        }
+      }
       const impulseMag = Math.hypot(impulseX, impulseY);
       const isLarge = b.mass > 1200;
       const hpDislodgeThresh = isLarge ? b.maxHp * 0.45 : b.maxHp * 0.75;
@@ -806,6 +1448,50 @@
       this.destroyedMass += b.mass;
       this.destroyedCells += Math.round(b.mass * 2);
       this.onShatter?.(b, force);
+      if (b.semanticRole === "trigger") {
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
+        this.puffAt(cx, cy, 28);
+        this.damageCircle(cx, cy, 65, { scorch: true, impulse: 360 });
+        sound.boom(0.8);
+        for (let i = 0; i < 14; i++) {
+          const a = i / 14 * Math.PI * 2;
+          this.spawnParticle({
+            x: cx,
+            y: cy,
+            vx: Math.cos(a) * (180 + Math.random() * 120),
+            vy: Math.sin(a) * (180 + Math.random() * 120),
+            life: 0.45,
+            max: 0.45,
+            kind: "spark",
+            color: Math.random() < 0.5 ? "#f59e0b" : "#ef4444",
+            size: 3
+          });
+        }
+      } else if (b.semanticRole === "portal") {
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
+        this.onPortalShatter?.(cx, cy);
+        for (let i = 0; i < 14; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.spawnParticle({
+            x: cx,
+            y: cy,
+            vx: Math.cos(a) * (120 + Math.random() * 100),
+            vy: Math.sin(a) * (120 + Math.random() * 100) - 50,
+            life: 0.6,
+            max: 0.6,
+            kind: "star",
+            color: Math.random() < 0.6 ? "#38bdf8" : "#ec4899",
+            size: 3.5
+          });
+        }
+      } else if (b.semanticRole === "structure") {
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
+        this.puffAt(cx, cy, 36);
+        sound.hit("metal", 0.9);
+      }
       if (b.kind === "word") {
         const wordShards = generateWordShards(b, hitX, hitY, force, impulseX, impulseY);
         this.shards.push(...wordShards);
@@ -1318,8 +2004,9 @@
             ctx.textBaseline = "top";
             ctx.fillText(b.text || "", scrX, scrY);
           }
-          if (b.underline) {
-            ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.5);
+          if (b.semanticRole === "portal" || b.underline) {
+            ctx.fillStyle = b.semanticRole === "portal" ? "rgba(56, 189, 248, 0.75)" : b.color || "#ffffff";
+            ctx.fillRect(scrX, scrY + b.h - 1, b.w, 1.6);
           }
           if (b.damageDecals.length > 0) {
             ctx.fillStyle = "rgba(25, 25, 25, 0.8)";
@@ -1332,6 +2019,15 @@
           ctx.restore();
         } else if (b.kind === "box") {
           drawVectorBox(ctx, scrX, scrY, b.w, b.h, b.radius, b.bg, b.grad, b.border, b.shadow);
+          if (b.semanticRole === "trigger") {
+            ctx.strokeStyle = "rgba(245, 158, 11, 0.45)";
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(scrX - 1, scrY - 1, b.w + 2, b.h + 2);
+          } else if (b.semanticRole === "portal") {
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.45)";
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(scrX - 1, scrY - 1, b.w + 2, b.h + 2);
+          }
           if (b.damageDecals.length > 0) {
             ctx.fillStyle = "rgba(20, 20, 20, 0.75)";
             for (const d of b.damageDecals) {
@@ -3255,583 +3951,6 @@
     return { ...theme, draw };
   }
 
-  // src/lib/game/sound.ts
-  var SoundEngine = class {
-    constructor() {
-      this.ctx = null;
-      this.master = null;
-      this.busFx = null;
-      this.busBoom = null;
-      this.busUi = null;
-      this.noiseBuf = null;
-      this.loops = /* @__PURE__ */ new Map();
-      this.muted = false;
-    }
-    ensure() {
-      if (this.ctx) {
-        if (this.ctx.state === "suspended") void this.ctx.resume();
-        return;
-      }
-      const AC = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AC({ latencyHint: "interactive" });
-      const comp = this.ctx.createDynamicsCompressor();
-      comp.threshold.value = -10;
-      comp.knee.value = 8;
-      comp.ratio.value = 4;
-      comp.attack.value = 3e-3;
-      comp.release.value = 0.2;
-      this.master = this.ctx.createGain();
-      this.master.gain.value = this.muted ? 0 : 0.85;
-      comp.connect(this.master);
-      this.master.connect(this.ctx.destination);
-      this.busFx = this.ctx.createGain();
-      this.busBoom = this.ctx.createGain();
-      this.busUi = this.ctx.createGain();
-      this.busFx.connect(comp);
-      this.busBoom.connect(comp);
-      this.busUi.connect(comp);
-      const len = this.ctx.sampleRate * 2;
-      this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-      const d = this.noiseBuf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-    }
-    setMuted(m) {
-      this.muted = m;
-      if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.85, this.ctx.currentTime, 0.03);
-    }
-    noise(dur) {
-      if (!this.ctx || !this.noiseBuf) return null;
-      const src = this.ctx.createBufferSource();
-      src.buffer = this.noiseBuf;
-      src.loop = true;
-      src.start(this.ctx.currentTime, Math.random() * 1.5, dur + 0.05);
-      return src;
-    }
-    env(gain, t0, a, peak, d) {
-      gain.gain.setValueAtTime(1e-4, t0);
-      gain.gain.linearRampToValueAtTime(peak, t0 + a);
-      gain.gain.exponentialRampToValueAtTime(1e-4, t0 + a + d);
-    }
-    out(bus, pan) {
-      if (!this.ctx) return null;
-      const b = bus === "boom" ? this.busBoom : bus === "ui" ? this.busUi : this.busFx;
-      if (!b) return null;
-      if (this.ctx.createStereoPanner) {
-        const p = this.ctx.createStereoPanner();
-        p.pan.value = Math.max(-1, Math.min(1, pan));
-        p.connect(b);
-        return p;
-      }
-      return b;
-    }
-    // gunshot-ish: noise burst through lowpass + tiny click
-    shot(kind, vol = 1, pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const dur = kind === "shotgun" ? 0.28 : kind === "pistol" ? 0.14 : 0.09;
-      const n = this.noise(dur);
-      const f = ctx.createBiquadFilter();
-      f.type = "lowpass";
-      const base = kind === "shotgun" ? 1400 : kind === "pistol" ? 2e3 : 2600;
-      f.frequency.setValueAtTime(base, t);
-      f.frequency.exponentialRampToValueAtTime(base * 0.25, t + dur);
-      const g = ctx.createGain();
-      this.env(g, t, 2e-3, (kind === "shotgun" ? 0.55 : 0.3) * vol, dur);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-      const osc = ctx.createOscillator();
-      osc.type = "square";
-      osc.frequency.setValueAtTime(kind === "shotgun" ? 320 : 700, t);
-      const g2 = ctx.createGain();
-      this.env(g2, t, 1e-3, 0.12 * vol, 0.03);
-      osc.connect(g2);
-      g2.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.05);
-      if (kind === "shotgun") {
-        const osc2 = ctx.createOscillator();
-        osc2.type = "sine";
-        osc2.frequency.setValueAtTime(110, t);
-        osc2.frequency.exponentialRampToValueAtTime(45, t + 0.25);
-        const g3 = ctx.createGain();
-        this.env(g3, t, 4e-3, 0.5 * vol, 0.25);
-        osc2.connect(g3);
-        g3.connect(this.out("boom", pan) ?? o);
-        osc2.start(t);
-        osc2.stop(t + 0.3);
-      }
-    }
-    boom(power = 1, pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("boom", pan);
-      if (!o) return;
-      const dur = 0.7 * power;
-      const n = this.noise(dur);
-      const f = ctx.createBiquadFilter();
-      f.type = "lowpass";
-      f.frequency.setValueAtTime(3e3, t);
-      f.frequency.exponentialRampToValueAtTime(120, t + dur);
-      const g = ctx.createGain();
-      this.env(g, t, 5e-3, 0.9 * power, dur);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-      const sub = ctx.createOscillator();
-      sub.type = "sine";
-      sub.frequency.setValueAtTime(160 * power, t);
-      sub.frequency.exponentialRampToValueAtTime(30, t + dur * 0.9);
-      const g2 = ctx.createGain();
-      this.env(g2, t, 5e-3, 0.8 * power, dur * 0.9);
-      sub.connect(g2);
-      g2.connect(o);
-      sub.start(t);
-      sub.stop(t + dur);
-    }
-    rail(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("boom", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(3800, t);
-      osc.frequency.exponentialRampToValueAtTime(180, t + 0.3);
-      const g = ctx.createGain();
-      this.env(g, t, 3e-3, 0.5, 0.3);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.35);
-      const n = this.noise(0.25);
-      const f = ctx.createBiquadFilter();
-      f.type = "highpass";
-      f.frequency.value = 1200;
-      const g2 = ctx.createGain();
-      this.env(g2, t, 2e-3, 0.4, 0.25);
-      n?.connect(f);
-      f.connect(g2);
-      g2.connect(o);
-    }
-    railCharge(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(180, t);
-      osc.frequency.exponentialRampToValueAtTime(1500, t + 0.5);
-      const g = ctx.createGain();
-      this.env(g, t, 0.1, 0.18, 0.45);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.6);
-    }
-    whoosh(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const n = this.noise(0.5);
-      const f = ctx.createBiquadFilter();
-      f.type = "bandpass";
-      f.frequency.setValueAtTime(400, t);
-      f.frequency.exponentialRampToValueAtTime(2400, t + 0.4);
-      f.Q.value = 1.2;
-      const g = ctx.createGain();
-      this.env(g, t, 0.03, 0.4, 0.45);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-    }
-    flameBurst(vol = 1, pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const n = this.noise(0.22);
-      const f = ctx.createBiquadFilter();
-      f.type = "bandpass";
-      f.frequency.value = 900 + Math.random() * 700;
-      f.Q.value = 0.7;
-      const g = ctx.createGain();
-      this.env(g, t, 0.02, 0.16 * vol, 0.2);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-    }
-    hit(kind, vol = 1, pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const n = this.noise(0.08);
-      const f = ctx.createBiquadFilter();
-      f.type = kind === "paper" ? "highpass" : kind === "image" ? "bandpass" : "lowpass";
-      f.frequency.value = kind === "paper" ? 2500 : kind === "image" ? 1800 : 700;
-      const g = ctx.createGain();
-      this.env(g, t, 1e-3, (kind === "block" ? 0.22 : 0.14) * vol, 0.07);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-    }
-    pop(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(600 + Math.random() * 500, t);
-      osc.frequency.exponentialRampToValueAtTime(150, t + 0.08);
-      const g = ctx.createGain();
-      this.env(g, t, 2e-3, 0.2, 0.08);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.1);
-    }
-    chutePop(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const n = this.noise(0.15);
-      const f = ctx.createBiquadFilter();
-      f.type = "bandpass";
-      f.frequency.setValueAtTime(600, t);
-      f.frequency.exponentialRampToValueAtTime(1600, t + 0.12);
-      const g = ctx.createGain();
-      this.env(g, t, 4e-3, 0.3, 0.14);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-    }
-    split(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(900, t);
-      osc.frequency.exponentialRampToValueAtTime(2400, t + 0.15);
-      const g = ctx.createGain();
-      this.env(g, t, 5e-3, 0.25, 0.15);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.2);
-    }
-    jet(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const n = this.noise(0.3);
-      const f = ctx.createBiquadFilter();
-      f.type = "lowpass";
-      f.frequency.value = 800;
-      const g = ctx.createGain();
-      this.env(g, t, 0.03, 0.1, 0.26);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-    }
-    // Magical arpeggio for the wand
-    wandCast(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("boom", pan);
-      if (!o) return;
-      const notes = [523, 659, 784, 1046, 1318];
-      notes.forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        osc.type = "sine";
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        const t0 = t + i * 0.08;
-        g.gain.setValueAtTime(1e-4, t0);
-        g.gain.linearRampToValueAtTime(0.16, t0 + 0.02);
-        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.5);
-        osc.connect(g);
-        g.connect(o);
-        osc.start(t0);
-        osc.stop(t0 + 0.55);
-      });
-    }
-    wandBlast(power = 1, pan = 0) {
-      this.boom(1.2 * power, pan);
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("boom", pan);
-      if (!o) return;
-      [1318, 1568, 2093].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        osc.type = "triangle";
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(1e-4, t);
-        g.gain.linearRampToValueAtTime(0.12, t + 0.02 + i * 0.04);
-        g.gain.exponentialRampToValueAtTime(1e-4, t + 0.8);
-        osc.connect(g);
-        g.connect(o);
-        osc.start(t);
-        osc.stop(t + 0.85);
-      });
-    }
-    starHum(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("boom", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(60, t);
-      osc.frequency.linearRampToValueAtTime(52, t + 2.5);
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 6.5;
-      const lg = ctx.createGain();
-      lg.gain.value = 8;
-      lfo.connect(lg);
-      lg.connect(osc.frequency);
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(1e-4, t);
-      g.gain.linearRampToValueAtTime(0.4, t + 0.3);
-      g.gain.setValueAtTime(0.4, t + 2.2);
-      g.gain.exponentialRampToValueAtTime(1e-4, t + 2.8);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 2.9);
-      lfo.start(t);
-      lfo.stop(t + 2.9);
-    }
-    droneBeep(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "square";
-      osc.frequency.value = 1200;
-      const g = ctx.createGain();
-      this.env(g, t, 5e-3, 0.08, 0.09);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.1);
-    }
-    switch(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", pan);
-      if (!o) return;
-      const n = this.noise(0.05);
-      const f = ctx.createBiquadFilter();
-      f.type = "highpass";
-      f.frequency.value = 1800;
-      const g = ctx.createGain();
-      this.env(g, t, 1e-3, 0.15, 0.05);
-      n?.connect(f);
-      f.connect(g);
-      g.connect(o);
-    }
-    click() {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", 0);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "square";
-      osc.frequency.value = 880;
-      const g = ctx.createGain();
-      this.env(g, t, 1e-3, 0.08, 0.04);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.06);
-    }
-    start() {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", 0);
-      if (!o) return;
-      [392, 523, 659, 784].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        osc.type = "triangle";
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        const t0 = t + i * 0.09;
-        g.gain.setValueAtTime(1e-4, t0);
-        g.gain.linearRampToValueAtTime(0.14, t0 + 0.02);
-        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.4);
-        osc.connect(g);
-        g.connect(o);
-        osc.start(t0);
-        osc.stop(t0 + 0.45);
-      });
-    }
-    complete() {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", 0);
-      if (!o) return;
-      [523, 659, 784, 1046, 784, 1046, 1318].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        osc.type = "triangle";
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        const t0 = t + i * 0.13;
-        g.gain.setValueAtTime(1e-4, t0);
-        g.gain.linearRampToValueAtTime(0.16, t0 + 0.02);
-        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.6);
-        osc.connect(g);
-        g.connect(o);
-        osc.start(t0);
-        osc.stop(t0 + 0.65);
-      });
-    }
-    jump(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(300, t);
-      osc.frequency.exponentialRampToValueAtTime(650, t + 0.12);
-      const g = ctx.createGain();
-      this.env(g, t, 4e-3, 0.12, 0.12);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.15);
-    }
-    // Mid-air flip double-jump sound: rising sine whoosh with chirp
-    flip(pan = 0) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("fx", pan);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(520, t);
-      osc.frequency.exponentialRampToValueAtTime(1100, t + 0.16);
-      const g = ctx.createGain();
-      this.env(g, t, 3e-3, 0.15, 0.16);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.18);
-      const n = this.noise(0.14);
-      if (n) {
-        const f = ctx.createBiquadFilter();
-        f.type = "bandpass";
-        f.frequency.setValueAtTime(1200, t);
-        f.Q.value = 2;
-        const ng = ctx.createGain();
-        this.env(ng, t, 5e-3, 0.1, 0.14);
-        n.connect(f);
-        f.connect(ng);
-        ng.connect(o);
-      }
-    }
-    // Milestone announcement sound (e.g. 25%, 50%, 75%, 100% destroyed)
-    milestone() {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", 0);
-      if (!o) return;
-      const notes = [587.33, 739.99, 880, 1174.66];
-      notes.forEach((freq, idx) => {
-        const osc = ctx.createOscillator();
-        osc.type = "square";
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        const t0 = t + idx * 0.07;
-        g.gain.setValueAtTime(1e-4, t0);
-        g.gain.linearRampToValueAtTime(0.12, t0 + 0.015);
-        g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.35);
-        osc.connect(g);
-        g.connect(o);
-        osc.start(t0);
-        osc.stop(t0 + 0.38);
-      });
-    }
-    // UI feedback chirp for Game Lab adjustments
-    labBeep(pitchHigh = false) {
-      this.ensure();
-      const ctx = this.ctx;
-      if (!ctx) return;
-      const t = ctx.currentTime;
-      const o = this.out("ui", 0);
-      if (!o) return;
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(pitchHigh ? 880 : 540, t);
-      osc.frequency.exponentialRampToValueAtTime(pitchHigh ? 1320 : 720, t + 0.06);
-      const g = ctx.createGain();
-      this.env(g, t, 2e-3, 0.09, 0.06);
-      osc.connect(g);
-      g.connect(o);
-      osc.start(t);
-      osc.stop(t + 0.08);
-    }
-    land(pan = 0) {
-      this.hit("block", 0.7, pan);
-    }
-  };
-  var sound = new SoundEngine();
-
   // src/lib/game/player.ts
   var PLAYER_DIMS = {
     width: 14,
@@ -5415,7 +5534,8 @@
               world.damageCircle(b.x + (Math.random() - 0.5) * 3, b.y + (Math.random() - 0.5) * 3, 2.2 + b.dmg * 0.12, { debris: true, countAsDestroy: true });
             }
             const pan = Math.max(-1, Math.min(1, b.x / world.W * 2 - 1));
-            sound.hit(Math.random() < 0.5 ? "paper" : "block", 0.8, pan);
+            const hitSound = bodyHit?.semanticRole === "structure" ? "metal" : Math.random() < 0.5 ? "paper" : "block";
+            sound.hit(hitSound, 0.8, pan);
             for (let k = 0; k < 3; k++) {
               world.spawnParticle({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300, life: 0.2, max: 0.2, kind: "spark", color: "#ffd23d", size: 2 });
             }
@@ -6145,6 +6265,12 @@
           this.shake = Math.max(this.shake, Math.min(10, 3 + force / 90));
         }
       };
+      this.world.onPortalShatter = (_wx, _wy) => {
+        if (this.player) {
+          this.player.jetFuel = Math.min(1, this.player.jetFuel + 0.35);
+          sound.labBeep(true);
+        }
+      };
       this.world.init(level.W, level.H + skyPx + bottomPx);
       if (level.bodies && level.bodies.length > 0) {
         this.world.loadBodies(level.bodies, level.W, level.H, skyPx);
@@ -6417,11 +6543,20 @@
       if (inp.fire && p.cooldown <= 0 && !this.done) {
         if (w.kind === "drone") {
           if ((!this.es.drone || this.es.drone.state === 2) && this.es.droneCd <= 0) {
-            this.es.drone = { x: p.x + p.facing * 24, y: p.y - 64, vx: 0, vy: 0, battery: 12, maxBattery: 12, state: 0, fireT: 0, rampK: 0, lowBeepT: 0 };
+            this.es.drone = { x: p.x + p.facing * 24, y: p.y - 64, vx: 0, vy: 0, battery: 14, maxBattery: 14, state: 0, fireT: 0, rampK: 0, lowBeepT: 0 };
             sound.droneBeep(0);
             this.weaponNameT = 1.2;
           }
-          p.cooldown = 0.35 * (wTune.cooldownMul ?? 1);
+          const mzX = p.x + Math.cos(p.aim) * 26;
+          const mzY = p.y - 34 + Math.sin(p.aim) * 26;
+          spawnBullet(this.es, mzX, mzY, Math.cos(p.aim) * 2600, Math.sin(p.aim) * 2600, 18, 4, "#7ff3ff");
+          sound.shot("drone", 0.8, 0);
+          p.shots++;
+          p.flashT = 0.05;
+          p.bloomT = 0.1;
+          p.kickRotV -= 0.5;
+          p.cooldown = 0.22 * (wTune.cooldownMul ?? 1);
+          this.fireHeld = true;
         } else if (w.auto || !this.fireHeld) {
           const pan = 0;
           fireWeapon(
@@ -6450,14 +6585,14 @@
       if (!inp.fire) this.fireHeld = false;
       if (p.chargeT <= 0 && p.weaponIdx === 4 && this.fireHeld && p.cooldown > 0.8) {
       }
-      if (inp.altPressed && p.grenadeCd <= 0 && !this.done) {
+      if (inp.altPressed && !this.done) {
         const d2 = this.es.drone;
-        if (d2 && d2.state === 0 && Math.hypot(d2.x - p.x, d2.y - p.y) < 900) {
+        if (w.kind === "drone" && d2 && d2.state === 0 && Math.hypot(d2.x - p.x, d2.y - p.y) < 900) {
           d2.state = 1;
-          d2.vx = (this.input.aimX - d2.x) * 1.5;
-          d2.vy = Math.max(120, (this.input.aimY - d2.y) * 1.5);
+          d2.vx = (this.input.aimX - d2.x) * 1.6;
+          d2.vy = Math.max(140, (this.input.aimY - d2.y) * 1.6);
           sound.droneBeep(0);
-        } else {
+        } else if (p.grenadeCd <= 0) {
           throwGrenade(
             world,
             this.es,
@@ -6713,8 +6848,42 @@
         ctx.fillRect(kx - 12, ky - 65, 24 * p.jetFuel, 2);
       }
       world.drawParticles(ctx, camX, camY);
+      const isGrenadeReady = p.grenadeCd <= 0;
+      const startX = renderPx + Math.cos(p.aim) * 20;
+      const startY = renderPy - 34 + Math.sin(p.aim) * 20;
+      const targetX = this.input.aimX;
+      const targetY = this.input.aimY;
+      const g = 2e3;
+      const tDx = targetX - startX;
+      const tDy = targetY - startY;
+      const tDist = Math.hypot(tDx, tDy);
+      const clampedDist = Math.min(750, Math.max(40, tDist));
+      const T = Math.min(1.1, Math.max(0.35, Math.sqrt(2 * clampedDist / g) * 1.1));
+      const throwVx = Math.max(-800, Math.min(800, tDx / (tDist || 1) * (clampedDist / T)));
+      const throwVy = Math.max(-950, Math.min(400, (tDy - 0.5 * g * T * T) / T));
+      ctx.save();
+      const arcSteps = 16;
+      for (let i = 1; i <= arcSteps; i++) {
+        const tArc = i / arcSteps * T;
+        const arcX = startX + throwVx * tArc - camX;
+        const arcY = startY + throwVy * tArc + 0.5 * g * tArc * tArc - camY;
+        const alphaVal = i / arcSteps * (isGrenadeReady ? 0.75 : 0.25);
+        ctx.fillStyle = isGrenadeReady ? `rgba(251, 191, 36, ${alphaVal})` : `rgba(148, 163, 184, ${alphaVal})`;
+        ctx.beginPath();
+        ctx.arc(arcX, arcY, isGrenadeReady ? 2.2 : 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const endX = startX + throwVx * T - camX;
+      const endY = startY + throwVy * T + 0.5 * g * T * T - camY;
+      ctx.strokeStyle = isGrenadeReady ? "rgba(251, 191, 36, 0.85)" : "rgba(148, 163, 184, 0.35)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(endX, endY, 7 + Math.sin(Date.now() * 9e-3) * 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
       const mx = this.clientMouseX;
       const my = this.clientMouseY;
+      ctx.save();
       ctx.lineCap = "butt";
       for (const pass of [0, 1]) {
         ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.95)";
@@ -6730,6 +6899,23 @@
         ctx.lineTo(mx, my + 10);
         ctx.stroke();
       }
+      const cdProgress = p.grenadeCd > 0 ? 1 - p.grenadeCd / GRENADE.cooldown : 1;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+      ctx.beginPath();
+      ctx.arc(mx, my, 13, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = isGrenadeReady ? "#fbbf24" : "#64748b";
+      ctx.beginPath();
+      ctx.arc(mx, my, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * cdProgress);
+      ctx.stroke();
+      if (isGrenadeReady) {
+        ctx.fillStyle = "#ffd23d";
+        ctx.beginPath();
+        ctx.arc(mx, my - 13, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
       if (p.flashT > 0 && WEAPONS[p.weaponIdx].kind !== "wand") {
         const fa = p.aim;
         const fx = renderPx + Math.cos(fa) * 32 - camX;

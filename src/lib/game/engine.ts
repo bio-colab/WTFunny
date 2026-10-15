@@ -184,6 +184,12 @@ export class DestroyEngine {
         this.shake = Math.max(this.shake, Math.min(10, 3 + force / 90))
       }
     }
+    this.world.onPortalShatter = (_wx, _wy) => {
+      if (this.player) {
+        this.player.jetFuel = Math.min(1.0, this.player.jetFuel + 0.35)
+        sound.labBeep(true)
+      }
+    }
     this.world.init(level.W, level.H + skyPx + bottomPx)
     if (level.bodies && level.bodies.length > 0) {
       this.world.loadBodies(level.bodies, level.W, level.H, skyPx)
@@ -495,13 +501,23 @@ export class DestroyEngine {
 
     if (inp.fire && p.cooldown <= 0 && !this.done) {
       if (w.kind === 'drone') {
-        // click: deploy drone if none
+        // Deploy drone if not active
         if ((!this.es.drone || this.es.drone.state === 2) && this.es.droneCd <= 0) {
-          this.es.drone = { x: p.x + p.facing * 24, y: p.y - 64, vx: 0, vy: 0, battery: 12, maxBattery: 12, state: 0, fireT: 0, rampK: 0, lowBeepT: 0 }
+          this.es.drone = { x: p.x + p.facing * 24, y: p.y - 64, vx: 0, vy: 0, battery: 14, maxBattery: 14, state: 0, fireT: 0, rampK: 0, lowBeepT: 0 }
           sound.droneBeep(0)
           this.weaponNameT = 1.2
         }
-        p.cooldown = 0.35 * (wTune.cooldownMul ?? 1)
+        // Player shoots plasma bolt in tandem with the drone
+        const mzX = p.x + Math.cos(p.aim) * 26
+        const mzY = p.y - 34 + Math.sin(p.aim) * 26
+        spawnBullet(this.es, mzX, mzY, Math.cos(p.aim) * 2600, Math.sin(p.aim) * 2600, 18, 4, '#7ff3ff')
+        sound.shot('drone', 0.8, 0)
+        p.shots++
+        p.flashT = 0.05
+        p.bloomT = 0.1
+        p.kickRotV -= 0.5
+        p.cooldown = 0.22 * (wTune.cooldownMul ?? 1)
+        this.fireHeld = true
       } else if (w.auto || !this.fireHeld) {
         const pan = 0
         fireWeapon(
@@ -534,16 +550,17 @@ export class DestroyEngine {
       // noop
     }
 
-    // grenade (RMB)
-    if (inp.altPressed && p.grenadeCd <= 0 && !this.done) {
+    // grenade / alt fire (RMB)
+    if (inp.altPressed && !this.done) {
       const d = this.es.drone
-      if (d && d.state === 0 && Math.hypot(d.x - p.x, d.y - p.y) < 900) {
-        // dive-bomb with drone directly into aim target
+      // If holding drone controller specifically and drone is active, RMB dive-bombs into target
+      if (w.kind === 'drone' && d && d.state === 0 && Math.hypot(d.x - p.x, d.y - p.y) < 900) {
         d.state = 1
-        d.vx = (this.input.aimX - d.x) * 1.5
-        d.vy = Math.max(120, (this.input.aimY - d.y) * 1.5)
+        d.vx = (this.input.aimX - d.x) * 1.6
+        d.vy = Math.max(140, (this.input.aimY - d.y) * 1.6)
         sound.droneBeep(0)
-      } else {
+      } else if (p.grenadeCd <= 0) {
+        // For ALL OTHER WEAPONS, RMB throws grenades freely without disturbing the drone
         throwGrenade(
           world,
           this.es,
@@ -845,9 +862,49 @@ export class DestroyEngine {
     // particles on top
     world.drawParticles(ctx, camX, camY)
 
+    // Grenade Ballistic Trajectory Arc & Impact Reticle
+    const isGrenadeReady = p.grenadeCd <= 0
+    const startX = renderPx + Math.cos(p.aim) * 20
+    const startY = renderPy - 34 + Math.sin(p.aim) * 20
+    const targetX = this.input.aimX
+    const targetY = this.input.aimY
+
+    const g = 2000
+    const tDx = targetX - startX
+    const tDy = targetY - startY
+    const tDist = Math.hypot(tDx, tDy)
+    const clampedDist = Math.min(750, Math.max(40, tDist))
+    const T = Math.min(1.1, Math.max(0.35, Math.sqrt((2 * clampedDist) / g) * 1.1))
+    const throwVx = Math.max(-800, Math.min(800, (tDx / (tDist || 1)) * (clampedDist / T)))
+    const throwVy = Math.max(-950, Math.min(400, (tDy - 0.5 * g * T * T) / T))
+
+    ctx.save()
+    const arcSteps = 16
+    for (let i = 1; i <= arcSteps; i++) {
+      const tArc = (i / arcSteps) * T
+      const arcX = startX + throwVx * tArc - camX
+      const arcY = startY + throwVy * tArc + 0.5 * g * tArc * tArc - camY
+      const alphaVal = (i / arcSteps) * (isGrenadeReady ? 0.75 : 0.25)
+      ctx.fillStyle = isGrenadeReady ? `rgba(251, 191, 36, ${alphaVal})` : `rgba(148, 163, 184, ${alphaVal})`
+      ctx.beginPath()
+      ctx.arc(arcX, arcY, isGrenadeReady ? 2.2 : 1.4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // Impact target reticle
+    const endX = startX + throwVx * T - camX
+    const endY = startY + throwVy * T + 0.5 * g * T * T - camY
+    ctx.strokeStyle = isGrenadeReady ? 'rgba(251, 191, 36, 0.85)' : 'rgba(148, 163, 184, 0.35)'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.arc(endX, endY, 7 + Math.sin(Date.now() * 0.009) * 2, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+
     // crosshair (dark outline + white core for visibility on any surface)
     const mx = this.clientMouseX
     const my = this.clientMouseY
+    ctx.save()
     ctx.lineCap = 'butt'
     for (const pass of [0, 1]) {
       ctx.strokeStyle = pass === 0 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.95)'
@@ -863,6 +920,26 @@ export class DestroyEngine {
       ctx.lineTo(mx, my + 10)
       ctx.stroke()
     }
+
+    // Circular Grenade Cooldown Meter around Crosshair
+    const cdProgress = p.grenadeCd > 0 ? 1 - p.grenadeCd / GRENADE.cooldown : 1
+    ctx.lineWidth = 2
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)'
+    ctx.beginPath()
+    ctx.arc(mx, my, 13, 0, Math.PI * 2)
+    ctx.stroke()
+
+    ctx.strokeStyle = isGrenadeReady ? '#fbbf24' : '#64748b'
+    ctx.beginPath()
+    ctx.arc(mx, my, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * cdProgress)
+    ctx.stroke()
+    if (isGrenadeReady) {
+      ctx.fillStyle = '#ffd23d'
+      ctx.beginPath()
+      ctx.arc(mx, my - 13, 2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
 
     // muzzle flash (aligned with interpolated player shoulder position)
     if (p.flashT > 0 && WEAPONS[p.weaponIdx].kind !== 'wand') {

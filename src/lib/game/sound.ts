@@ -1,16 +1,19 @@
 // Procedural WebAudio SFX engine - every sound synthesized, no external assets.
 // Bus layout mirrors the original: fx / boom / ui with a master compressor.
+import { ConfigManager } from './engineConfig'
 
 type Ctx = AudioContext
 
 export class SoundEngine {
   private ctx: Ctx | null = null
   private master: GainNode | null = null
+  private bassFilter: BiquadFilterNode | null = null
   private busFx: GainNode | null = null
   private busBoom: GainNode | null = null
   private busUi: GainNode | null = null
   private noiseBuf: AudioBuffer | null = null
   private loops = new Map<string, { src: AudioBufferSourceNode; gain: GainNode }>()
+  private subscribed = false
   muted = false
 
   ensure() {
@@ -26,16 +29,32 @@ export class SoundEngine {
     comp.ratio.value = 4
     comp.attack.value = 0.003
     comp.release.value = 0.2
+
+    // Bass Boost Filter Node (connected before master gain)
+    this.bassFilter = this.ctx.createBiquadFilter()
+    this.bassFilter.type = 'lowshelf'
+    this.bassFilter.frequency.value = 110
+    this.bassFilter.gain.value = 0
+
     this.master = this.ctx.createGain()
-    this.master.gain.value = this.muted ? 0 : 0.85
-    comp.connect(this.master)
+    comp.connect(this.bassFilter)
+    this.bassFilter.connect(this.master)
     this.master.connect(this.ctx.destination)
+
     this.busFx = this.ctx.createGain()
     this.busBoom = this.ctx.createGain()
     this.busUi = this.ctx.createGain()
     this.busFx.connect(comp)
     this.busBoom.connect(comp)
     this.busUi.connect(comp)
+
+    // Sync with Game Lab / ConfigManager audio settings
+    this.syncConfig()
+    if (!this.subscribed && typeof window !== 'undefined') {
+      this.subscribed = true
+      ConfigManager.get().subscribe(() => this.syncConfig())
+    }
+
     // white noise buffer (2s)
     const len = this.ctx.sampleRate * 2
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
@@ -43,9 +62,30 @@ export class SoundEngine {
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1
   }
 
+  syncConfig() {
+    if (!this.ctx || !this.master) return
+    const cfg = ConfigManager.get().getConfig().audio
+    const isMuted = this.muted || cfg.muted
+    const masterVol = isMuted ? 0 : (cfg.masterVolume ?? 0.85)
+    const sfxVol = cfg.sfxVolume ?? 1.0
+    const profileMul = cfg.profile === 'heavy' ? 1.25 : cfg.profile === 'retro' ? 0.9 : 1.0
+
+    this.master.gain.setTargetAtTime(masterVol, this.ctx.currentTime, 0.03)
+    if (this.busFx) this.busFx.gain.setTargetAtTime(sfxVol * profileMul, this.ctx.currentTime, 0.03)
+    if (this.busBoom) this.busBoom.gain.setTargetAtTime(sfxVol * (cfg.bassBoost ? 1.45 : 1.0) * profileMul, this.ctx.currentTime, 0.03)
+    if (this.busUi) this.busUi.gain.setTargetAtTime(sfxVol, this.ctx.currentTime, 0.03)
+    if (this.bassFilter) this.bassFilter.gain.setTargetAtTime(cfg.bassBoost ? 8 : 0, this.ctx.currentTime, 0.03)
+  }
+
   setMuted(m: boolean) {
     this.muted = m
-    if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.85, this.ctx.currentTime, 0.03)
+    this.syncConfig()
+  }
+
+  private getPitchMultiplier(): number {
+    const cfg = ConfigManager.get().getConfig().audio
+    const variance = cfg?.pitchVariance ?? 0.08
+    return 1 + (Math.random() - 0.5) * 2 * variance
   }
 
   private noise(dur: number): AudioBufferSourceNode | null {
@@ -85,10 +125,11 @@ export class SoundEngine {
     const o = this.out('fx', pan)
     if (!o) return
     const dur = kind === 'shotgun' ? 0.28 : kind === 'pistol' ? 0.14 : 0.09
+    const pm = this.getPitchMultiplier()
     const n = this.noise(dur)
     const f = ctx.createBiquadFilter()
     f.type = 'lowpass'
-    const base = kind === 'shotgun' ? 1400 : kind === 'pistol' ? 2000 : 2600
+    const base = (kind === 'shotgun' ? 1400 : kind === 'pistol' ? 2000 : 2600) * pm
     f.frequency.setValueAtTime(base, t)
     f.frequency.exponentialRampToValueAtTime(base * 0.25, t + dur)
     const g = ctx.createGain()
@@ -99,7 +140,7 @@ export class SoundEngine {
     // click transient
     const osc = ctx.createOscillator()
     osc.type = 'square'
-    osc.frequency.setValueAtTime(kind === 'shotgun' ? 320 : 700, t)
+    osc.frequency.setValueAtTime((kind === 'shotgun' ? 320 : 700) * pm, t)
     const g2 = ctx.createGain()
     this.env(g2, t, 0.001, 0.12 * vol, 0.03)
     osc.connect(g2)
@@ -110,8 +151,8 @@ export class SoundEngine {
       // low boom tail
       const osc2 = ctx.createOscillator()
       osc2.type = 'sine'
-      osc2.frequency.setValueAtTime(110, t)
-      osc2.frequency.exponentialRampToValueAtTime(45, t + 0.25)
+      osc2.frequency.setValueAtTime(110 * pm, t)
+      osc2.frequency.exponentialRampToValueAtTime(45 * pm, t + 0.25)
       const g3 = ctx.createGain()
       this.env(g3, t, 0.004, 0.5 * vol, 0.25)
       osc2.connect(g3)
@@ -128,12 +169,13 @@ export class SoundEngine {
     const t = ctx.currentTime
     const o = this.out('boom', pan)
     if (!o) return
+    const pm = this.getPitchMultiplier()
     const dur = 0.7 * power
     const n = this.noise(dur)
     const f = ctx.createBiquadFilter()
     f.type = 'lowpass'
-    f.frequency.setValueAtTime(3000, t)
-    f.frequency.exponentialRampToValueAtTime(120, t + dur)
+    f.frequency.setValueAtTime(3000 * pm, t)
+    f.frequency.exponentialRampToValueAtTime(120 * pm, t + dur)
     const g = ctx.createGain()
     this.env(g, t, 0.005, 0.9 * power, dur)
     n?.connect(f)
@@ -141,14 +183,18 @@ export class SoundEngine {
     g.connect(o)
     const sub = ctx.createOscillator()
     sub.type = 'sine'
-    sub.frequency.setValueAtTime(160 * power, t)
-    sub.frequency.exponentialRampToValueAtTime(30, t + dur * 0.9)
+    sub.frequency.setValueAtTime(160 * power * pm, t)
+    sub.frequency.exponentialRampToValueAtTime(30 * pm, t + dur * 0.9)
     const g2 = ctx.createGain()
     this.env(g2, t, 0.005, 0.8 * power, dur * 0.9)
     sub.connect(g2)
     g2.connect(o)
     sub.start(t)
     sub.stop(t + dur)
+  }
+
+  explode(power = 1, pan = 0) {
+    this.boom(power, pan)
   }
 
   rail(pan = 0) {
@@ -237,22 +283,38 @@ export class SoundEngine {
     g.connect(o)
   }
 
-  hit(kind: 'paper' | 'block' | 'image', vol = 1, pan = 0) {
+  hit(kind: 'paper' | 'block' | 'image' | 'metal', vol = 1, pan = 0) {
     this.ensure()
     const ctx = this.ctx
     if (!ctx) return
     const t = ctx.currentTime
     const o = this.out('fx', pan)
     if (!o) return
+    const pm = this.getPitchMultiplier()
     const n = this.noise(0.08)
     const f = ctx.createBiquadFilter()
-    f.type = kind === 'paper' ? 'highpass' : kind === 'image' ? 'bandpass' : 'lowpass'
-    f.frequency.value = kind === 'paper' ? 2500 : kind === 'image' ? 1800 : 700
+    f.type = kind === 'paper' ? 'highpass' : kind === 'image' ? 'bandpass' : kind === 'metal' ? 'bandpass' : 'lowpass'
+    f.frequency.value = (kind === 'paper' ? 2500 : kind === 'image' ? 1800 : kind === 'metal' ? 3200 : 700) * pm
+    if (kind === 'metal') f.Q.value = 5.5
     const g = ctx.createGain()
-    this.env(g, t, 0.001, (kind === 'block' ? 0.22 : 0.14) * vol, 0.07)
+    this.env(g, t, 0.001, (kind === 'metal' ? 0.28 : kind === 'block' ? 0.22 : 0.14) * vol, kind === 'metal' ? 0.11 : 0.07)
     n?.connect(f)
     f.connect(g)
     g.connect(o)
+
+    if (kind === 'metal') {
+      // Resonant metallic ping transient
+      const osc = ctx.createOscillator()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(2200 * pm, t)
+      osc.frequency.exponentialRampToValueAtTime(1100, t + 0.11)
+      const g2 = ctx.createGain()
+      this.env(g2, t, 0.001, 0.16 * vol, 0.11)
+      osc.connect(g2)
+      g2.connect(o)
+      osc.start(t)
+      osc.stop(t + 0.13)
+    }
   }
 
   pop(pan = 0) {
